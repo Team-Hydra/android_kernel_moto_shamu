@@ -1377,24 +1377,9 @@ static int functionfs_bind(struct ffs_data *ffs, struct usb_composite_dev *cdev)
 	if (WARN_ON(ffs->state != FFS_ACTIVE))
 		return -EBADFD;
 
-<<<<<<< HEAD
-	if (test_and_set_bit(FFS_FL_BOUND, &ffs->flags)) {
-		pr_warn("%s: already bound\n", __func__);
-		return -EALREADY;
-	}
-
-	if (!ffs->first_id || ffs->old_strings_count < ffs->strings_count) {
-		int first_id = usb_string_ids_n(cdev, ffs->strings_count);
-		if (unlikely(first_id < 0))
-			return first_id;
-		ffs->first_id = first_id;
-		ffs->old_strings_count = ffs->strings_count;
-	}
-=======
 	first_id = usb_string_ids_n(cdev, ffs->strings_count);
 	if (unlikely(first_id < 0))
 		return first_id;
->>>>>>> 44d2ef95... Merge tag 'v3.10.48' into cm-12.0
 
 	ffs->ep0req = usb_ep_alloc_request(cdev->gadget->ep0, GFP_KERNEL);
 	if (unlikely(!ffs->ep0req))
