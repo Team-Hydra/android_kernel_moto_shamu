@@ -327,9 +327,9 @@ static irqreturn_t armpmu_dispatch_irq(int irq, void *dev)
 
 	start_clock = sched_clock();
 	if (plat && plat->handle_irq)
-		ret = plat->handle_irq(irq, armpmu, armpmu->handle_irq);
+		ret = plat->handle_irq(irq, dev, armpmu->handle_irq);
 	else
-		ret = armpmu->handle_irq(irq, armpmu);
+		ret = armpmu->handle_irq(irq, dev);
 	finish_clock = sched_clock();
 
 	perf_sample_event_took(finish_clock - start_clock);
