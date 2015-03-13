@@ -1016,6 +1016,7 @@ static ssize_t store_boost(struct kobject *kobj, struct attribute *attr,
 		trace_cpufreq_interactive_boost("on");
 		cpufreq_interactive_boost();
 	} else {
+		boostpulse_endtime = ktime_to_us(ktime_get());
 		trace_cpufreq_interactive_unboost("off");
 	}
 
@@ -1325,6 +1326,8 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			del_timer_sync(&pcpu->cpu_slack_timer);
 
 			if (pcpu->nr_timer_resched) {
+				if (pcpu->policy->max < pcpu->target_freq)
+					pcpu->target_freq = pcpu->policy->max;
 				if (pcpu->policy->min >= pcpu->target_freq)
 					pcpu->target_freq = pcpu->policy->min;
 				/*
