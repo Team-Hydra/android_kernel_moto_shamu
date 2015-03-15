@@ -1154,14 +1154,26 @@ int mdss_dsi_clk_ctrl(struct mdss_dsi_ctrl_pdata *ctrl,
 	}
 
 	/*
-	 * In broadcast mode, we need to enable clocks for the
-	 * master controller as well when enabling clocks for the
-	 * slave controller
+	 * In sync_wait_broadcast mode, we need to enable clocks
+	 * for the other controller as well when enabling clocks
+	 * for the trigger controller.
+	 *
+	 * If sync wait_broadcase mode is not enabled, but if split display
+	 * mode is enabled where both DSI controller's branch clocks are
+	 * sourced out of a single PLL, then we need to ensure that the
+	 * controller associated with that PLL also has it's clocks turned
+	 * on. This is required to make sure that if that controller's PLL/PHY
+	 * are clamped then they can be removed.
 	 */
-	if (mdss_dsi_is_slave_ctrl(ctrl)) {
-		mctrl = mdss_dsi_get_master_ctrl();
+	if (mdss_dsi_sync_wait_trigger(ctrl)) {
+		mctrl = mdss_dsi_get_other_ctrl(ctrl);
 		if (!mctrl)
-			pr_warn("%s: Unable to get master control\n", __func__);
+			pr_warn("%s: Unable to get other control\n", __func__);
+	} else if (mdss_dsi_is_ctrl_clk_slave(ctrl)) {
+		mctrl = mdss_dsi_get_ctrl_clk_master();
+		if (!mctrl)
+			pr_warn("%s: Unable to get clk master control\n",
+				__func__);
 	}
 
 	pr_debug("%s++: ndx=%d clk_type=%d bus_clk_cnt=%d link_clk_cnt=%d\n",
@@ -1369,6 +1381,17 @@ void mdss_edp_aux_clk_disable(struct mdss_edp_drv_pdata *edp_drv)
 	clk_disable(edp_drv->mdp_core_clk);
 }
 
+static void mdss_edp_clk_set_rate(struct mdss_edp_drv_pdata *edp_drv)
+{
+	if (clk_set_rate(edp_drv->link_clk, edp_drv->link_rate * 27000000) < 0)
+		pr_err("%s: link_clk - clk_set_rate failed\n",
+					__func__);
+
+	if (clk_set_rate(edp_drv->pixel_clk, edp_drv->pixel_rate) < 0)
+		pr_err("%s: pixel_clk - clk_set_rate failed\n",
+					__func__);
+}
+
 int mdss_edp_clk_enable(struct mdss_edp_drv_pdata *edp_drv)
 {
 	int ret;
@@ -1491,6 +1514,8 @@ void mdss_edp_unprepare_aux_clocks(struct mdss_edp_drv_pdata *edp_drv)
 int mdss_edp_prepare_clocks(struct mdss_edp_drv_pdata *edp_drv)
 {
 	int ret;
+
+	mdss_edp_clk_set_rate(edp_drv);
 
 	/* ahb clock should be prepared first */
 	ret = clk_prepare(edp_drv->ahb_clk);

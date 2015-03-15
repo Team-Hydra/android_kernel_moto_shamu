@@ -20,6 +20,7 @@
 #include <mach/gpiomux.h>
 #include <mach/msm_bus.h>
 #include "msm_camera_io_util.h"
+#include <linux/pinctrl/consumer.h>
 
 #define BUFF_SIZE_128 128
 
@@ -261,7 +262,7 @@ int msm_camera_config_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 				reg_ptr[j] = NULL;
 				goto vreg_get_fail;
 			}
-			if (curr_vreg->type == REG_LDO) {
+			if (regulator_count_voltages(reg_ptr[j]) > 0) {
 				rc = regulator_set_voltage(
 					reg_ptr[j],
 					curr_vreg->min_voltage,
@@ -296,7 +297,7 @@ int msm_camera_config_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 				j = i;
 			curr_vreg = &cam_vreg[j];
 			if (reg_ptr[j]) {
-				if (curr_vreg->type == REG_LDO) {
+				if (regulator_count_voltages(reg_ptr[j]) > 0) {
 					if (curr_vreg->op_mode >= 0) {
 						regulator_set_optimum_mode(
 							reg_ptr[j], 0);
@@ -313,11 +314,11 @@ int msm_camera_config_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 	return 0;
 
 vreg_unconfig:
-if (curr_vreg->type == REG_LDO)
+if (regulator_count_voltages(reg_ptr[j]) > 0)
 	regulator_set_optimum_mode(reg_ptr[j], 0);
 
 vreg_set_opt_mode_fail:
-if (curr_vreg->type == REG_LDO)
+if (regulator_count_voltages(reg_ptr[j]) > 0)
 	regulator_set_voltage(reg_ptr[j], 0,
 		curr_vreg->max_voltage);
 
@@ -488,7 +489,7 @@ int msm_camera_config_single_vreg(struct device *dev,
 			*reg_ptr = NULL;
 			goto vreg_get_fail;
 		}
-		if (cam_vreg->type == REG_LDO) {
+		if (regulator_count_voltages(*reg_ptr) > 0) {
 			rc = regulator_set_voltage(
 				*reg_ptr, cam_vreg->min_voltage,
 				cam_vreg->max_voltage);
@@ -518,7 +519,7 @@ int msm_camera_config_single_vreg(struct device *dev,
 		if (*reg_ptr) {
 			CDBG("%s disable %s\n", __func__, cam_vreg->reg_name);
 			regulator_disable(*reg_ptr);
-			if (cam_vreg->type == REG_LDO) {
+			if (regulator_count_voltages(*reg_ptr) > 0) {
 				if (cam_vreg->op_mode >= 0)
 					regulator_set_optimum_mode(*reg_ptr, 0);
 				regulator_set_voltage(
@@ -531,11 +532,11 @@ int msm_camera_config_single_vreg(struct device *dev,
 	return 0;
 
 vreg_unconfig:
-if (cam_vreg->type == REG_LDO)
+if (regulator_count_voltages(*reg_ptr) > 0)
 	regulator_set_optimum_mode(*reg_ptr, 0);
 
 vreg_set_opt_mode_fail:
-if (cam_vreg->type == REG_LDO)
+if (regulator_count_voltages(*reg_ptr) > 0)
 	regulator_set_voltage(*reg_ptr, 0, cam_vreg->max_voltage);
 
 vreg_set_voltage_fail:
@@ -578,5 +579,58 @@ int msm_camera_request_gpio_table(struct gpio *gpio_tbl, uint8_t size,
 	} else {
 		gpio_free_array(gpio_tbl, size);
 	}
+	return rc;
+}
+
+int msm_camera_request_mux_gpio_table(struct device *dev, struct gpio *gpio_tbl,
+	uint8_t size, int gpio_en)
+{
+	int rc = 0, i = 0, err = 0;
+	struct pinctrl *pinctrl;
+
+	if (!gpio_tbl || !size) {
+		pr_err("%s:%d invalid gpio_tbl %p / size %d\n", __func__,
+			__LINE__, gpio_tbl, size);
+		return -EINVAL;
+	}
+
+	dev_info(dev, "%s state %s\n", __func__,
+		gpio_en ? "active" : "default");
+
+	for (i = 0; i < size; i++) {
+		CDBG("%s:%d i %d, gpio %d dir %ld\n", __func__, __LINE__, i,
+			gpio_tbl[i].gpio, gpio_tbl[i].flags);
+	}
+
+	if (gpio_en) {
+		pinctrl = devm_pinctrl_get_select(dev, "active");
+		if (IS_ERR(pinctrl)) {
+			rc = PTR_ERR(pinctrl);
+			dev_err(dev, "pinctrl failed err %d\n", rc);
+			return rc;
+		}
+		for (i = 0; i < size; i++) {
+			err = gpio_request_one(gpio_tbl[i].gpio,
+				gpio_tbl[i].flags, gpio_tbl[i].label);
+			if (err) {
+				/*
+				* After GPIO request fails, contine to
+				* apply new gpios, outout a error message
+				* for driver bringup debug
+				*/
+				pr_err("%s:%d gpio %d:%s request fails\n",
+					__func__, __LINE__,
+					gpio_tbl[i].gpio, gpio_tbl[i].label);
+			}
+		}
+	} else {
+		gpio_free_array(gpio_tbl, size);
+		pinctrl = devm_pinctrl_get_select(dev, "default");
+		if (IS_ERR(pinctrl)) {
+			rc = PTR_ERR(pinctrl);
+			dev_err(dev, "pinctrl failed err %d\n", rc);
+		}
+	}
+
 	return rc;
 }

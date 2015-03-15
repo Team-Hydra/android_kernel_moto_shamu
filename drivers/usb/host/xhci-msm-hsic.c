@@ -23,12 +23,14 @@
 #include <linux/bitops.h>
 #include <linux/workqueue.h>
 #include <linux/clk/msm-clk.h>
+#include <linux/reboot.h>
 
 #include <mach/msm_bus.h>
 #include <mach/rpm-regulator.h>
 #include <mach/msm_iomap.h>
 #include <linux/debugfs.h>
 #include <asm/unaligned.h>
+#include <linux/pinctrl/consumer.h>
 
 #include "xhci.h"
 
@@ -134,7 +136,9 @@ struct mxhci_hsic_hcd {
 	struct tasklet_struct	bh;
 	unsigned		handled_event_cnt;
 	unsigned		cpu_yield_cnt;
+	struct notifier_block   hsic_reboot;
 };
+
 
 #define SYNOPSIS_DWC3_VENDOR	0x5533
 
@@ -145,8 +149,8 @@ static struct dbg_data dbg_hsic = {
 	.data_lck = __RW_LOCK_UNLOCKED(dlck),
 	.log_payload = 1,
 	.log_events = 1,
-	.inep_log_mask = 1,
-	.outep_log_mask = 1
+	.inep_log_mask = 0xffff,
+	.outep_log_mask = 0xffff
 };
 
 static inline void dbg_inc(unsigned *idx)
@@ -294,6 +298,35 @@ static void mxhci_hsic_bus_vote_w(struct work_struct *w)
 	if (ret)
 		dev_err(mxhci->dev, "%s: Failed to vote for bus bandwidth %d\n",
 				__func__, ret);
+}
+
+static int mxhci_hsic_reboot(struct notifier_block *nb,
+			unsigned long event, void *unused)
+{
+	struct mxhci_hsic_hcd *mxhci =
+			container_of(nb, struct mxhci_hsic_hcd, hsic_reboot);
+	struct usb_hcd *hcd = hsic_to_hcd(mxhci);
+	u32 reg;
+
+	dev_dbg(mxhci->dev, "Disabling HSIC\n");
+	disable_irq(hcd->irq);
+	if (mxhci->wakeup_irq_enabled) {
+		disable_irq_wake(mxhci->wakeup_irq);
+		disable_irq_nosync(mxhci->wakeup_irq);
+		mxhci->wakeup_irq_enabled = 0;
+	}
+	/* disable STROBE_PAD_CTL */
+	reg = readl_relaxed(TLMM_GPIO_HSIC_STROBE_PAD_CTL);
+	writel_relaxed(reg & 0xfdffffff, TLMM_GPIO_HSIC_STROBE_PAD_CTL);
+
+	/* disable DATA_PAD_CTL */
+	reg = readl_relaxed(TLMM_GPIO_HSIC_DATA_PAD_CTL);
+	writel_relaxed(reg & 0xfdffffff, TLMM_GPIO_HSIC_DATA_PAD_CTL);
+
+	mb();
+	mxhci->xhci_shutdown_flag = true;
+	wake_up(&mxhci->phy_in_lpm_wq);
+	return NOTIFY_DONE;
 }
 
 static int mxhci_hsic_init_clocks(struct mxhci_hsic_hcd *mxhci, u32 init)
@@ -489,6 +522,14 @@ static int mxhci_msm_config_gdsc(struct mxhci_hsic_hcd *mxhci, int on)
 static int mxhci_hsic_config_gpios(struct mxhci_hsic_hcd *mxhci)
 {
 	int rc = 0;
+	struct pinctrl *pinctrl;
+
+	pinctrl = devm_pinctrl_get_select(mxhci->dev, "active");
+	if (IS_ERR(pinctrl)) {
+		rc = PTR_ERR(pinctrl);
+		dev_err(mxhci->dev, "pinctrl failed err %d\n", rc);
+		return rc;
+	}
 
 	rc = devm_gpio_request(mxhci->dev, mxhci->strobe, "HSIC_STROBE_GPIO");
 	if (rc < 0) {
@@ -995,6 +1036,10 @@ int mxhci_hsic_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 	u32 status;
 
 	ret = xhci_hub_control(hcd, typeReq, wValue, wIndex, buf, wLength);
+	if (!hcd->primary_hcd)
+		return ret;
+
+	mxhci = hcd_to_hsic(hcd->primary_hcd);
 
 	if (!hcd->primary_hcd)
 		return ret;
@@ -1622,6 +1667,14 @@ static int mxhci_hsic_probe(struct platform_device *pdev)
 	if (ret)
 		pr_err("err creating sysfs node\n");
 
+	mxhci->hsic_reboot.notifier_call = mxhci_hsic_reboot;
+	mxhci->hsic_reboot.next = NULL;
+	mxhci->hsic_reboot.priority = 1;
+	ret = register_reboot_notifier(&mxhci->hsic_reboot);
+	if (ret)
+		dev_err(&pdev->dev, "%s: register for reboot failed\n",
+					__func__);
+
 	dev_dbg(&pdev->dev, "%s: Probe complete\n", __func__);
 
 	ret = mxhci_hsic_debugfs_init();
@@ -1708,7 +1761,13 @@ static int mxhci_hsic_remove(struct platform_device *pdev)
 	mxhci_hsic_init_clocks(mxhci, 0);
 	mxhci_msm_config_gdsc(mxhci, 0);
 	kfree(xhci);
+	unregister_reboot_notifier(&mxhci->hsic_reboot);
 	usb_put_hcd(hcd);
+
+
+	/* only need this if we want to set default state on exit */
+	if (IS_ERR(devm_pinctrl_get_select_default(&pdev->dev)))
+		dev_err(&pdev->dev, "pinctrl set default failed\n");
 
 	return 0;
 }

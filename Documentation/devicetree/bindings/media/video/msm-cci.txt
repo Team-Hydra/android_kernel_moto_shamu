@@ -75,9 +75,6 @@ Required properties:
 - qcom,cam-vreg-name : should contain names of all regulators needed by this
     sensor
     - "cam_vdig", "cam_vana", "cam_vio", "cam_vaf"
-- qcom,cam-vreg-type : should contain regulator type for regulators mentioned in
-    qcom,cam-vreg-name property (in the same order)
-    - 0 for LDO and 1 for LVS
 - qcom,cam-vreg-min-voltage : should contain minimum voltage level for
     regulators mentioned in qcom,cam-vreg-name property (in the same order)
 - qcom,cam-vreg-max-voltage : should contain maximum voltage level for
@@ -161,6 +158,8 @@ Optional properties:
 - qcom,vdd-cx-name : should contain names of cx regulator
 - qcom,eeprom-src : if eeprom memory is supported by this sensor, this
    property should contain phandle of respective eeprom nodes
+- qcom,ois-src : if optical image stabilization is supported by this sensor,
+   this property should contain phandle of respective ois node
 
 * Qualcomm MSM ACTUATOR
 
@@ -180,9 +179,6 @@ Optional properties:
 - qcom,cam-vreg-name : should contain names of all regulators needed by this
     actuator
     - "cam_vaf"
-- qcom,cam-vreg-type : should contain regulator type for regulators mentioned in
-    qcom,cam-vreg-name property (in the same order)
-    - 0 for LDO and 1 for LVS
 - qcom,cam-vreg-min-voltage : should contain minimum voltage level in mcrovolts
    for regulators mentioned in qcom,cam-vreg-name property (in the same order)
 - qcom,cam-vreg-max-voltage : should contain maximum voltage level in mcrovolts
@@ -191,6 +187,33 @@ Optional properties:
    required from the regulators mentioned in the qcom,cam-vreg-name property
    (in the same order).
 - cam_vaf-supply : should contain regulator from which AF voltage is supplied
+
+* Qualcomm MSM OIS
+
+Required properties:
+- cell-index : should contain unique identifier to differentiate
+    between multiple ois drivers
+- reg : should contain i2c slave address of the ois and length of
+    data field which is 0x0
+- compatible :
+    - "qcom,ois"
+- qcom,cci-master : should contain i2c master id to be used for this camera
+    sensor
+    - 0 -> MASTER 0
+    - 1 -> MASTER 1
+
+Optional properties:
+- qcom,cam-vreg-name : should contain names of all regulators needed by this
+    ois
+    - "cam_vaf"
+- qcom,cam-vreg-min-voltage : should contain minimum voltage level in mcrovolts
+   for regulators mentioned in qcom,cam-vreg-name property (in the same order)
+- qcom,cam-vreg-max-voltage : should contain maximum voltage level in mcrovolts
+   for regulators mentioned in qcom,cam-vreg-name property (in the same order)
+- qcom,cam-vreg-op-mode : should contain the maximum current in microamps
+   required from the regulators mentioned in the qcom,cam-vreg-name property
+   (in the same order).
+- cam_vaf-supply : should contain regulator from which ois voltage is supplied
 
 Example:
 
@@ -232,7 +255,6 @@ Example:
 		qcom,cci-master = <0>;
 		cam_vaf-supply = <&pm8941_l23>;
 		qcom,cam-vreg-name = "cam_vaf";
-		qcom,cam-vreg-type = <0>;
 		qcom,cam-vreg-min-voltage = <3000000>;
 		qcom,cam-vreg-max-voltage = <3000000>;
 		qcom,cam-vreg-op-mode = <100000>;
@@ -256,7 +278,6 @@ Example:
                cam_vio-supply = <&pm8941_lvs3>;
                cam_vaf-supply = <&pm8941_l23>;
                qcom,cam-vreg-name = "cam_vdig", "cam_vana", "cam_vio", "cam_vaf";
-               qcom,cam-vreg-type = <0 0 1 0>;
                qcom,cam-vreg-min-voltage = <1225000 2850000 0 3000000>;
                qcom,cam-vreg-max-voltage = <1225000 2850000 0 3000000>;
                qcom,cam-vreg-op-mode = <105000 80000 0 100000>;

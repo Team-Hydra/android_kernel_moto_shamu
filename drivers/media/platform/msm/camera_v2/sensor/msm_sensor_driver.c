@@ -262,6 +262,46 @@ static int32_t msm_sensor_fill_actuator_subdevid_by_name(
 	return rc;
 }
 
+static int32_t msm_sensor_fill_ois_subdevid_by_name(
+				struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int32_t rc = 0;
+	struct device_node *src_node = NULL;
+	uint32_t val = 0;
+	int32_t *ois_subdev_id;
+	struct  msm_sensor_info_t *sensor_info;
+	struct device_node *of_node = s_ctrl->of_node;
+
+	if (!of_node)
+		return -EINVAL;
+
+	sensor_info = s_ctrl->sensordata->sensor_info;
+	ois_subdev_id = &sensor_info->subdev_id[SUB_MODULE_OIS];
+	/*
+	 * string for ois name is valid, set sudev id to -1
+	 * and try to found new id
+	 */
+	*ois_subdev_id = -1;
+
+	src_node = of_parse_phandle(of_node, "qcom,ois-src", 0);
+	if (!src_node) {
+		CDBG("%s:%d src_node NULL\n", __func__, __LINE__);
+	} else {
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+		CDBG("%s qcom,ois cell index %d, rc %d\n", __func__,
+			val, rc);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			return -EINVAL;
+		}
+		*ois_subdev_id = val;
+		of_node_put(src_node);
+		src_node = NULL;
+	}
+
+	return rc;
+}
+
 static int32_t msm_sensor_fill_slave_info_init_params(
 	struct msm_camera_sensor_slave_info *slave_info,
 	struct msm_sensor_info_t *sensor_info)
@@ -312,6 +352,183 @@ static int32_t msm_sensor_validate_slave_info(
 		sensor_info->is_mount_angle_valid = 1;
 	}
 	return 0;
+}
+
+static int msm_sensor_read_otp(struct msm_sensor_ctrl_t *s_ctrl)
+{
+	uint16_t status_reg;
+
+	int16_t page_id = 0;
+	int16_t poll_times = 0;
+
+	int32_t rc = 0;
+
+	struct msm_camera_sensor_slave_info *camera_info;
+	struct otp_info_t *otp;
+
+	camera_info = s_ctrl->sensordata->cam_slave_info;
+	if (!camera_info) {
+		pr_warn("%s: camera slave info is not defined\n", __func__);
+		return -EAGAIN;
+	}
+
+	otp = &camera_info->sensor_init_params.sensor_otp;
+	if (otp->otp_info) {
+		pr_devel("%s: %s OTP already read\n", __func__,
+			s_ctrl->sensordata->sensor_name);
+		return 0;
+
+	} else if (!otp->enable) {
+		pr_warn("%s: %s OTP disabled in sensor lib\n", __func__,
+			s_ctrl->sensordata->sensor_name);
+		return 0;
+	}
+
+	pr_devel("%s sensor OTP initialization block:\n"
+			" - page size: %d\n"
+			" - pages count: %d\n"
+			" - page register address: 0x%x\n"
+			" - first page base address: 0x%x\n"
+			" - control register address: 0x%x\n"
+			" - read mode setting: 0x%x\n"
+			" - status register address: 0x%x\n"
+			" - read complete bit: 0x%x\n"
+			" - reset register address: 0x%x\n"
+			" - stream on: 0x%x\n"
+			" - stream off: 0x%x\n"
+			" - data segment address: 0x%x\n"
+			" - data size: %d\n"
+			" - %s endian\n"
+			" - poll times: %d\n"
+			" - poll sleep delay: %d\n",
+
+			s_ctrl->sensordata->sensor_name,
+
+			otp->page_size,
+			otp->num_of_pages,
+			otp->page_reg_addr,
+			otp->page_reg_base_addr,
+			otp->ctrl_reg_addr,
+			otp->ctrl_reg_read_mode,
+			otp->status_reg_addr,
+			otp->status_reg_read_complete_bit,
+			otp->reset_reg_addr,
+			otp->reset_reg_stream_on,
+			otp->reset_reg_stream_off,
+			otp->data_seg_addr,
+			otp->data_size,
+			otp->big_endian ? "big" : "little",
+			otp->poll_times,
+			otp->poll_usleep
+			);
+
+	/* Allocate OTP memory */
+	otp->otp_info = kzalloc(otp->page_size*otp->num_of_pages, GFP_KERNEL);
+	if (otp->otp_info == NULL) {
+		pr_err("%s: Unable to allocate memory for OTP!\n", __func__);
+		return -ENOMEM;
+	}
+
+
+	/* Enable Streaming */
+	if (otp->reset_reg_addr) {
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(
+			s_ctrl->sensor_i2c_client,
+			otp->reset_reg_addr,
+			otp->reset_reg_stream_on,
+			otp->data_size);
+		if (rc < 0) {
+			pr_err("%s: Unable to stream on the sensor!\n",
+					__func__);
+			goto exit;
+		}
+	}
+
+
+	for (page_id = 0; page_id < otp->num_of_pages; ++page_id) {
+
+		uint16_t page_addr = otp->page_reg_base_addr + page_id;
+		if (otp->data_size == MSM_CAMERA_I2C_WORD_DATA &&
+				otp->big_endian) {
+			page_addr = cpu_to_be16(page_addr);
+		}
+
+		/* Write OTP page address */
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(
+			s_ctrl->sensor_i2c_client,
+			otp->page_reg_addr, page_addr,
+			otp->data_size);
+		if (rc < 0) {
+			pr_err("%s: Unable to write OTP page address!\n",
+					__func__);
+			goto disable_streaming;
+		}
+
+		/* Set OTP read mode */
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(
+			s_ctrl->sensor_i2c_client,
+			otp->ctrl_reg_addr,
+			otp->ctrl_reg_read_mode,
+			otp->data_size);
+		if (rc < 0) {
+			pr_err("%s: Unable to set OTP read mode!\n", __func__);
+			goto disable_streaming;
+		}
+
+		/* Poll status register until read complete flag is set */
+		while (poll_times < otp->poll_times) {
+			rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(
+				s_ctrl->sensor_i2c_client,
+				otp->status_reg_addr, &status_reg,
+				otp->data_size);
+			if (rc < 0) {
+				pr_err("%s: Unable to read OTP status!\n",
+						__func__);
+				goto disable_streaming;
+			}
+
+			if (status_reg & otp->status_reg_read_complete_bit)
+				break;
+
+			usleep(otp->poll_usleep);
+			poll_times++;
+		}
+
+
+		/* Read OTP data */
+		if (!(status_reg & otp->status_reg_read_complete_bit)) {
+			pr_devel("%s: OTP read of page 0x%x failed\n",
+				__func__, otp->page_reg_base_addr + page_id);
+			continue;
+		}
+
+		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->
+			i2c_read_seq(s_ctrl->sensor_i2c_client,
+			otp->data_seg_addr,
+			otp->otp_info + page_id*otp->page_size,
+			otp->page_size);
+		if (rc < 0) {
+			pr_err("%s: Unable to read OTP page 0x%x over i2c!\n",
+				__func__, otp->page_reg_base_addr + page_id);
+			goto disable_streaming;
+		}
+
+		pr_devel("%s: OTP read of page 0x%x successful\n",
+			__func__, otp->page_reg_base_addr + page_id);
+	}
+
+disable_streaming:
+	/* Disable streaming */
+	if (otp->reset_reg_addr) {
+		s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(
+				s_ctrl->sensor_i2c_client,
+				otp->reset_reg_addr,
+				otp->reset_reg_stream_off,
+				otp->data_size);
+	}
+
+exit:
+	return rc;
 }
 
 /* static function definition */
@@ -397,6 +614,13 @@ int32_t msm_sensor_driver_probe(void *setting)
 	}
 
 	size = slave_info->power_setting_array.size;
+	/* Validate size */
+	if (size > MAX_POWER_CONFIG) {
+		pr_err("failed: invalid number of power_up_setting %d\n", size);
+		rc = -EINVAL;
+		goto FREE_SLAVE_INFO;
+	}
+
 	/* Allocate memory for power up setting */
 	power_setting = kzalloc(sizeof(*power_setting) * size, GFP_KERNEL);
 	if (!power_setting) {
@@ -423,6 +647,12 @@ int32_t msm_sensor_driver_probe(void *setting)
 	size_down = slave_info->power_setting_array.size_down;
 	if (!size_down)
 		size_down = size;
+	/* Validate size_down */
+	if (size_down > MAX_POWER_CONFIG) {
+		pr_err("failed: invalid size_down %d", size_down);
+		rc = -EINVAL;
+		goto FREE_POWER_SETTING;
+	}
 	/* Allocate memory for power down setting */
 	power_down_setting =
 		kzalloc(sizeof(*power_setting) * size_down, GFP_KERNEL);
@@ -548,7 +778,6 @@ int32_t msm_sensor_driver_probe(void *setting)
 	s_ctrl->sensordata->sensor_name = slave_info->sensor_name;
 	s_ctrl->sensordata->eeprom_name = slave_info->eeprom_name;
 	s_ctrl->sensordata->actuator_name = slave_info->actuator_name;
-
 	/*
 	 * Update eeporm subdevice Id by input eeprom name
 	 */
@@ -566,6 +795,12 @@ int32_t msm_sensor_driver_probe(void *setting)
 		goto FREE_CAMERA_INFO;
 	}
 
+	rc = msm_sensor_fill_ois_subdevid_by_name(s_ctrl);
+	if (rc < 0) {
+		pr_err("%s failed %d\n", __func__, __LINE__);
+		goto FREE_CAMERA_INFO;
+	}
+
 	/* Power up and probe sensor */
 	rc = s_ctrl->func_tbl->sensor_power_up(s_ctrl);
 	if (rc < 0) {
@@ -575,11 +810,29 @@ int32_t msm_sensor_driver_probe(void *setting)
 
 	pr_err("%s probe succeeded", slave_info->sensor_name);
 
+	/* Save sensor info*/
+	s_ctrl->sensordata->cam_slave_info = slave_info;
+
+	/* Read OTP */
+	rc = msm_sensor_read_otp(s_ctrl);
+	if (rc < 0) {
+		pr_err("%s OTP read failed", slave_info->sensor_name);
+		goto CAMERA_POWER_DOWN;
+	}
+
 	/*
 	  Set probe succeeded flag to 1 so that no other camera shall
 	 * probed on this slot
 	 */
 	s_ctrl->is_probe_succeed = 1;
+
+	/*
+	 * Update the subdevice id of flash-src based on availability in kernel.
+	 */
+	if (slave_info->is_flash_supported == 0) {
+		s_ctrl->sensordata->sensor_info->
+			subdev_id[SUB_MODULE_LED_FLASH] = -1;
+	}
 
 	/*
 	 * Create /dev/videoX node, comment for now until dummy /dev/videoX
@@ -616,9 +869,6 @@ int32_t msm_sensor_driver_probe(void *setting)
 	mount_pos = mount_pos | ((s_ctrl->sensordata->sensor_info->
 		sensor_mount_angle / 90) << 8);
 	s_ctrl->msm_sd.sd.entity.flags = mount_pos | MEDIA_ENT_FL_DEFAULT;
-
-	/*Save sensor info*/
-	s_ctrl->sensordata->cam_slave_info = slave_info;
 
 	return rc;
 

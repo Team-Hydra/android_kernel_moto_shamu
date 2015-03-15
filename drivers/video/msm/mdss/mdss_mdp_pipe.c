@@ -1051,8 +1051,17 @@ static int mdss_mdp_image_setup(struct mdss_mdp_pipe *pipe,
 
 	if ((pipe->mixer_left->type != MDSS_MDP_MIXER_TYPE_WRITEBACK) &&
 		!pipe->mixer_left->ctl->is_video_mode &&
-		!pipe->src_split_req)
-			mdss_mdp_crop_rect(&src, &dst, &sci);
+		!pipe->src_split_req) {
+		mdss_mdp_crop_rect(&src, &dst, &sci);
+		if (pipe->flags & MDP_FLIP_LR) {
+			src.x = pipe->src.x + (pipe->src.x + pipe->src.w)
+				- (src.x + src.w);
+		}
+		if (pipe->flags & MDP_FLIP_UD) {
+			src.y = pipe->src.y + (pipe->src.y + pipe->src.h)
+				- (src.y + src.h);
+		}
+	}
 
 	src_size = (src.h << 16) | src.w;
 	src_xy = (src.y << 16) | src.x;
@@ -1329,7 +1338,8 @@ int mdss_mdp_pipe_queue_data(struct mdss_mdp_pipe *pipe,
 		((pipe->type == MDSS_MDP_PIPE_TYPE_DMA) &&
 		 (pipe->mixer_left->type == MDSS_MDP_MIXER_TYPE_WRITEBACK) &&
 		 (ctl->mdata->mixer_switched)) || ctl->roi_changed;
-	if ((!(pipe->flags & MDP_VPU_PIPE) && src_data == NULL) ||
+	if ((!(pipe->flags & MDP_VPU_PIPE) &&
+			(src_data == NULL || !pipe->has_buf)) ||
 			(pipe->flags & MDP_SOLID_FILL)) {
 		pipe->params_changed = 0;
 		mdss_mdp_pipe_solidfill_setup(pipe);
@@ -1363,10 +1373,9 @@ int mdss_mdp_pipe_queue_data(struct mdss_mdp_pipe *pipe,
 			opmode);
 	}
 
-	if ((pipe->flags & MDP_VPU_PIPE) && (src_data == NULL ||
-			!pipe->has_buf)) {
-		pr_debug("%s src_data=%p has_buf=%d pipe num=%dx",
-				__func__, src_data, pipe->has_buf, pipe->num);
+	if (src_data == NULL || !pipe->has_buf) {
+		pr_debug("src_data=%p has_buf=%d pipe num=%dx",
+				src_data, pipe->has_buf, pipe->num);
 		goto update_nobuf;
 	}
 

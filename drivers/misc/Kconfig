@@ -609,6 +609,46 @@ config APQ8084_DOCKING_STATION
 	  This option enables support for the USB and Ethernet ports found on
 	  the QTI APQ8084 Docking Station.
 
+config HAPTIC_DRV2605
+	tristate "TI DRV2605 haptic driver"
+	depends on I2C && SYSFS
+	help
+	  If you say yes here you get support for the TI DRV2605
+	  haptic driver.
+
+config C55_CTRL
+	tristate "TI C55 Control driver"
+	help
+	  This option enables device driver to control the TI C55 IC. This
+	  is intended to be a simple driver which only exports the GPIOs
+	  for user space use.
+
+config MMI_FACTORY
+	tristate "Motorola Mobility Factory driver"
+	depends on OF
+	help
+	  This option enables a device driver that is collects many
+	  of the extensions needed by the Motorola factory.  If you
+	  aren't literally building a Motorola Device you can safely
+	  say no here.
+	default n
+
+config MMI_SAR
+	tristate "Motorola Mobility SAR driver"
+	help
+	  This option enables MMI-SAR device driver that provides interface
+	  to control max TX power and sends notifications to other kernel
+	  components when SAR cutback has to be applied.
+	default n
+
+config ALSA_TO_H2W
+	tristate "ALSA to H2W wired headset detection converter"
+	help
+	  This option enables a device driver that attach to the input queue and
+	  and exposes EV_SW events SW_HEADPHONE_INSERT & SW_MICROPHONE_INSERT in
+	  /sys/class/switch/h2w/state used by Android headset observer.
+	default n
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -619,4 +659,6 @@ source "drivers/misc/altera-stapl/Kconfig"
 source "drivers/misc/mei/Kconfig"
 source "drivers/misc/vmw_vmci/Kconfig"
 source "drivers/misc/qcom/Kconfig"
+source "drivers/misc/capsense_prog/Kconfig"
+source "drivers/misc/stm401/Kconfig"
 endmenu

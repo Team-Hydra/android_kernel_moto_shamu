@@ -61,6 +61,7 @@
 #include "apq8084-pinctrl.dtsi"
 #include "apq8084-camera.dtsi"
 #include "apq8084-ipcrouter.dtsi"
+#include "msm-rdbg.dtsi"
 
 &soc {
 	#address-cells = <1>;
@@ -231,6 +232,11 @@
 						1 &intc 0 238 0
 						2 &msmgpio 44 0>;
 
+		qcom,tx-gpio = <&msmgpio 43 0x00>;
+		qcom,rx-gpio = <&msmgpio 44 0x00>;
+		qcom,cts-gpio = <&msmgpio 45 0x00>;
+		qcom,rfr-gpio = <&msmgpio 46 0x00>;
+
 		qcom,bam-tx-ep-pipe-index = <10>;
 		qcom,bam-rx-ep-pipe-index = <11>;
 		qcom,msm-bus,name = "uart6";
@@ -239,6 +245,7 @@
 		qcom,msm-bus,vectors-KBps =
 				<86 512 0 0>,
 				<86 512 500 800>;
+		status = "disabled";
 	};
 
 	blsp2_uart4: uart@f9961000 { /* BLSP2 UART4 */
@@ -259,8 +266,6 @@
 
 		qcom,tx-gpio = <&msmgpio 112 0>;
 		qcom,rx-gpio = <&msmgpio 113 0>;
-		qcom,inject-rx-on-wakeup = <1>;
-		qcom,rx-char-to-inject = <0x18>;
 
 		qcom,wakeup_irq = <2>;
 		qcom,bam-tx-ep-pipe-index = <8>;
@@ -690,6 +695,7 @@
 	};
 
 	qcom,qcrypto1@fd440000 {
+		status = "disabled";
 		compatible = "qcom,qcrypto";
 		reg = <0xfd440000 0x20000>,
 		      <0xfd444000 0x1b000>;
@@ -972,7 +978,7 @@
 		interrupts = <0 104 0>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
-		qcom,i2c-bus-freq = <100000>;
+		qcom,i2c-bus-freq = <400000>;
 		qcom,i2c-src-freq = <50000000>;
 		qcom,sda-gpio = <&msmgpio 61 0>;
 		qcom,scl-gpio = <&msmgpio 62 0>;
@@ -4326,30 +4332,37 @@
 			tx-fifo-resize;
 			usb-phy = <&hsphy0>, <&ssphy0>;
 		};
+	};
 
-		usb3_sec: ssusb@f9400000 {
-			compatible = "qcom,dwc-usb3-msm";
+	usb3_sec: ssusb@f9400000 {
+		compatible = "qcom,dwc-usb3-msm";
+		reg = <0xf9400000 0xfc000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+		interrupt-parent = <&intc>;
+		interrupts = <0 261 4>;
+		interrupt-names = "hs_phy_irq";
+		USB3_GDSC-supply = <&gdsc_usb30_sec>;
+		qcom,restore-sec-cfg-for-scm-dev-id = <10>;
+		qcom,charging-disabled;
+		status = "disabled";
+
+		qcom,msm-bus,name = "usb3_sec";
+		qcom,msm-bus,num-cases = <2>;
+		qcom,msm-bus,num-paths = <1>;
+		qcom,msm-bus,vectors-KBps =
+				<61 512 0 0>,
+				<61 512 240000 1920000>;
+
+		dwc3@f9400000 {
+			compatible = "synopsys,dwc3";
 			reg = <0xf9400000 0xfc000>;
-			#address-cells = <1>;
-			#size-cells = <1>;
-			ranges;
 			interrupt-parent = <&intc>;
-			interrupts = <0 261 4>;
-			interrupt-names = "hs_phy_irq";
-			USB3_GDSC-supply = <&gdsc_usb30_sec>;
-			qcom,restore-sec-cfg-for-scm-dev-id = <10>;
-			qcom,charging-disabled;
-			status = "disabled";
-
-			dwc3@f9400000 {
-				compatible = "synopsys,dwc3";
-				reg = <0xf9400000 0xfc000>;
-				interrupt-parent = <&intc>;
-				interrupts = <0 258 4>, <0 262 4>;
-				interrupt-names = "irq", "otg_irq";
-				usb-phy = <&hsphy1>, <&ssphy1>;
-				host-only-mode;
-			};
+			interrupts = <0 258 4>, <0 262 4>;
+			interrupt-names = "irq", "otg_irq";
+			usb-phy = <&hsphy1>, <&ssphy0>;
+			host-only-mode;
 		};
 	};
 
@@ -4397,16 +4410,6 @@
 		qcom,ext-vbus-id;
 		qcom,num-ports = <3>;
 		qcom,primary-phy = <&hsphy0>;
-		status = "disabled";
-	};
-
-	ssphy1: ssphy@f94f8800 {
-		compatible = "qcom,usb-ssphy";
-		reg = <0xf94f8800 0x3ff>;
-		vdd-supply = <&pma8084_s1>;
-		vdda18-supply = <&pma8084_l6>;
-		qcom,vdd-voltage-level = <0 900000 1050000>;
-		qcom,primary-phy = <&ssphy0>;
 		status = "disabled";
 	};
 
@@ -4960,9 +4963,9 @@
 					<68 604 456000 519000>,
 					<68 604 864000 519000>,
 					<68 604 1728000 3640000>,
-					<68 604 2766000 1661000>,
-					<68 604 3456000 2076000>,
-					<68 604 3662000 2198000>;
+					<68 604 2766000 3640000>,
+					<68 604 3456000 3640000>,
+					<68 604 3662000 3640000>;
 				qcom,bus-configs = <0x30fcfff>;
 			};
 		};
@@ -5370,6 +5373,13 @@
 					  <45 512 25000 200000>,  /* 200 Mbps */
 					  <45 512 100000 200000>; /* 800 Mbps */
 	};
+
+	qcom,avtimer {
+		compatible = "qcom,avtimer";
+		reg = <0xFE0C900C  0x4>,
+		      <0xFE0C9010  0x4>;
+		reg-names = "avtimer_lsb_addr", "avtimer_msb_addr";
+	};
 };
 
 &gdsc_venus {
@@ -5432,6 +5442,7 @@
 };
 
 &gdsc_usb30_sec{
+	parent-supply = <&gdsc_usb30>;
 	status = "ok";
 };
 

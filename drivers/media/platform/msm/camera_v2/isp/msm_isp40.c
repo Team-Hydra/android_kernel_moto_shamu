@@ -307,7 +307,8 @@ vfe_remap_failed:
 	msm_cam_clk_enable(&vfe_dev->pdev->dev, msm_vfe40_clk_info,
 		vfe_dev->vfe_clk, ARRAY_SIZE(msm_vfe40_clk_info), 0);
 clk_enable_failed:
-	regulator_disable(vfe_dev->fs_vfe);
+	if (vfe_dev->fs_vfe)
+		regulator_disable(vfe_dev->fs_vfe);
 fs_failed:
 	msm_isp_deinit_bandwidth_mgr(ISP_VFE0 + vfe_dev->pdev->id);
 bus_scale_register_failed:
@@ -376,8 +377,10 @@ static void msm_vfe40_process_camif_irq(struct vfe_device *vfe_dev,
 	}
 	if (irq_status0 & (1 << 1))
 		ISP_DBG("%s: EOF IRQ\n", __func__);
-	if (irq_status0 & (1 << 2))
+	if (irq_status0 & (1 << 2)) {
 		ISP_DBG("%s: EPOCH0 IRQ\n", __func__);
+		msm_isp_epoch_notify(vfe_dev, ISP_EPOCH_0);
+	}
 	if (irq_status0 & (1 << 3))
 		ISP_DBG("%s: EPOCH1 IRQ\n", __func__);
 }
@@ -558,8 +561,9 @@ static void msm_vfe40_process_reg_update(struct vfe_device *vfe_dev,
 	if (atomic_read(&vfe_dev->stats_data.stats_update))
 		msm_isp_stats_stream_update(vfe_dev);
 	if (atomic_read(&vfe_dev->axi_data.axi_cfg_update))
-		msm_isp_axi_cfg_update(vfe_dev);
+		msm_isp_axi_cfg_update(vfe_dev, VFE_PIX_0, ts);
 	msm_isp_update_framedrop_reg(vfe_dev);
+	msm_isp_update_stats_framedrop_reg(vfe_dev);
 	msm_isp_update_error_frame_count(vfe_dev);
 
 	vfe_dev->hw_info->vfe_ops.core_ops.reg_update(vfe_dev);
@@ -848,6 +852,12 @@ static void msm_vfe40_cfg_camif(struct vfe_device *vfe_dev,
 			__func__, pix_cfg->input_mux);
 		break;
 	}
+
+	/* Configure epoch to half of active frame */
+	val = msm_camera_io_r(vfe_dev->vfe_base + 0x318);
+	val &= ~0x3fff0000;
+	val |= (camif_cfg->lines_per_frame / 2) << 16;
+	msm_camera_io_w(val, vfe_dev->vfe_base + 0x318);
 }
 
 static void msm_vfe40_update_camif_state(struct vfe_device *vfe_dev,
@@ -1121,7 +1131,7 @@ static long msm_vfe40_axi_halt(struct vfe_device *vfe_dev)
 	msm_camera_io_w_mb(halt_mask, vfe_dev->vfe_base + 0x2C);
 	init_completion(&vfe_dev->halt_complete);
 	msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x2C0);
-	return wait_for_completion_interruptible_timeout(
+	return wait_for_completion_timeout(
 		&vfe_dev->halt_complete, msecs_to_jiffies(500));
 }
 

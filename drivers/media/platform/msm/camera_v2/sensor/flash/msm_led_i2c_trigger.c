@@ -49,6 +49,7 @@ int32_t msm_led_i2c_trigger_config(struct msm_led_flash_ctrl_t *fctrl,
 	void *data)
 {
 	int rc = 0;
+	int i = 0;
 	struct msm_camera_led_cfg_t *cfg = (struct msm_camera_led_cfg_t *)data;
 	CDBG("called led_state %d\n", cfg->cfgtype);
 
@@ -61,6 +62,12 @@ int32_t msm_led_i2c_trigger_config(struct msm_led_flash_ctrl_t *fctrl,
 	case MSM_CAMERA_LED_INIT:
 		if (fctrl->func_tbl->flash_led_init)
 			rc = fctrl->func_tbl->flash_led_init(fctrl);
+		for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+			cfg->flash_current[i] =
+				fctrl->flash_max_current[i];
+			cfg->flash_duration[i] =
+				fctrl->flash_max_duration[i];
+		}
 		break;
 
 	case MSM_CAMERA_LED_RELEASE:
@@ -125,15 +132,20 @@ int msm_flash_led_init(struct msm_led_flash_ctrl_t *fctrl)
 	}
 
 	msleep(20);
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_EN],
-		GPIO_OUT_HIGH);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_HIGH);
+	}
 
+	/* Don't need to set FL_NOW gpio high during init */
+#if 0
 	gpio_set_value_cansleep(
 		power_info->gpio_conf->gpio_num_info->
 		gpio_num[SENSOR_GPIO_FL_NOW],
 		GPIO_OUT_HIGH);
+#endif
 
 	if (fctrl->flash_i2c_client && fctrl->reg_setting) {
 		rc = fctrl->flash_i2c_client->i2c_func_tbl->i2c_write_table(
@@ -151,21 +163,25 @@ int msm_flash_led_release(struct msm_led_flash_ctrl_t *fctrl)
 	struct msm_camera_sensor_board_info *flashdata = NULL;
 	struct msm_camera_power_ctrl_t *power_info = NULL;
 
-	flashdata = fctrl->flashdata;
-	power_info = &flashdata->power_info;
-	CDBG("%s:%d called\n", __func__, __LINE__);
 	if (!fctrl) {
 		pr_err("%s:%d fctrl NULL\n", __func__, __LINE__);
 		return -EINVAL;
 	}
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_EN],
-		GPIO_OUT_LOW);
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_NOW],
-		GPIO_OUT_LOW);
+	flashdata = fctrl->flashdata;
+	power_info = &flashdata->power_info;
+	CDBG("%s:%d called\n", __func__, __LINE__);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_LOW);
+	}
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_NOW]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_NOW],
+			GPIO_OUT_LOW);
+	}
 	rc = msm_camera_request_gpio_table(
 		power_info->gpio_conf->cam_gpio_req_tbl,
 		power_info->gpio_conf->cam_gpio_req_tbl_size, 0);
@@ -190,24 +206,33 @@ int msm_flash_led_off(struct msm_led_flash_ctrl_t *fctrl)
 	struct msm_camera_sensor_board_info *flashdata = NULL;
 	struct msm_camera_power_ctrl_t *power_info = NULL;
 
-	flashdata = fctrl->flashdata;
-	power_info = &flashdata->power_info;
-	CDBG("%s:%d called\n", __func__, __LINE__);
 	if (!fctrl) {
 		pr_err("%s:%d fctrl NULL\n", __func__, __LINE__);
 		return -EINVAL;
 	}
-	if (fctrl->flash_i2c_client && fctrl->reg_setting) {
+	flashdata = fctrl->flashdata;
+	power_info = &flashdata->power_info;
+	CDBG("%s:%d called\n", __func__, __LINE__);
+	if (fctrl->flash_i2c_client && fctrl->reg_setting &&
+		fctrl->reg_setting->off_setting) {
 		rc = fctrl->flash_i2c_client->i2c_func_tbl->i2c_write_table(
 			fctrl->flash_i2c_client,
 			fctrl->reg_setting->off_setting);
 		if (rc < 0)
 			pr_err("%s:%d failed\n", __func__, __LINE__);
 	}
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_NOW],
-		GPIO_OUT_LOW);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_NOW]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_NOW],
+			GPIO_OUT_LOW);
+	}
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_TOR_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_TOR_EN],
+			GPIO_OUT_LOW);
+	}
 
 	return rc;
 }
@@ -221,18 +246,30 @@ int msm_flash_led_low(struct msm_led_flash_ctrl_t *fctrl)
 
 	flashdata = fctrl->flashdata;
 	power_info = &flashdata->power_info;
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_EN],
-		GPIO_OUT_HIGH);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_HIGH);
+	}
 
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_NOW],
-		GPIO_OUT_HIGH);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_TOR_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_TOR_EN],
+			GPIO_OUT_HIGH);
+	} else {
+		if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_NOW]) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_HIGH);
+		}
+	}
 
 
-	if (fctrl->flash_i2c_client && fctrl->reg_setting) {
+	if (fctrl->flash_i2c_client && fctrl->reg_setting &&
+		fctrl->reg_setting->low_setting) {
 		rc = fctrl->flash_i2c_client->i2c_func_tbl->i2c_write_table(
 			fctrl->flash_i2c_client,
 			fctrl->reg_setting->low_setting);
@@ -252,17 +289,21 @@ int msm_flash_led_high(struct msm_led_flash_ctrl_t *fctrl)
 
 	flashdata = fctrl->flashdata;
 	power_info = &flashdata->power_info;
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_EN],
-		GPIO_OUT_HIGH);
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_EN]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_HIGH);
+	}
+	if (power_info->gpio_conf->gpio_num_info->valid[SENSOR_GPIO_FL_NOW]) {
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_NOW],
+			GPIO_OUT_HIGH);
+	}
 
-	gpio_set_value_cansleep(
-		power_info->gpio_conf->gpio_num_info->
-		gpio_num[SENSOR_GPIO_FL_NOW],
-		GPIO_OUT_HIGH);
-
-	if (fctrl->flash_i2c_client && fctrl->reg_setting) {
+	if (fctrl->flash_i2c_client && fctrl->reg_setting &&
+		fctrl->reg_setting->high_setting) {
 		rc = fctrl->flash_i2c_client->i2c_func_tbl->i2c_write_table(
 			fctrl->flash_i2c_client,
 			fctrl->reg_setting->high_setting);
@@ -425,6 +466,50 @@ static int32_t msm_led_get_dt_data(struct device_node *of_node,
 				pr_err("%s failed %d\n", __func__, __LINE__);
 				goto ERROR6;
 			}
+		}
+
+		/* Read the max current for an LED if present */
+		if (of_get_property(of_node, "qcom,max-current", &count)) {
+			count /= sizeof(uint32_t);
+
+			if (count > MAX_LED_TRIGGERS) {
+				pr_err("failed\n");
+				rc = -EINVAL;
+				goto ERROR8;
+			}
+
+			rc = of_property_read_u32_array(of_node,
+				"qcom,max-current",
+				fctrl->flash_max_current, count);
+			if (rc < 0) {
+				pr_err("%s failed %d\n", __func__, __LINE__);
+				goto ERROR8;
+			}
+
+			for (; count < MAX_LED_TRIGGERS; count++)
+				fctrl->flash_max_current[count] = 0;
+		}
+
+		/* Read the max duration for an LED if present */
+		if (of_get_property(of_node, "qcom,max-duration", &count)) {
+			count /= sizeof(uint32_t);
+
+			if (count > MAX_LED_TRIGGERS) {
+				pr_err("failed\n");
+				rc = -EINVAL;
+				goto ERROR8;
+			}
+
+			rc = of_property_read_u32_array(of_node,
+				"qcom,max-duration",
+				fctrl->flash_max_duration, count);
+			if (rc < 0) {
+				pr_err("%s failed %d\n", __func__, __LINE__);
+				goto ERROR8;
+			}
+
+			for (; count < MAX_LED_TRIGGERS; count++)
+				fctrl->flash_max_duration[count] = 0;
 		}
 
 		flashdata->slave_info =
@@ -608,6 +693,7 @@ int msm_flash_probe(struct platform_device *pdev,
 		pr_err("%s flash_i2c_client NULL\n",
 			__func__);
 		rc = -EFAULT;
+		goto probe_failure;
 	}
 
 	fctrl->flash_i2c_client->cci_client = kzalloc(sizeof(

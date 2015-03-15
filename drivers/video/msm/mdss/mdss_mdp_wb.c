@@ -460,20 +460,20 @@ static struct mdss_mdp_wb_data *get_user_node(struct msm_fb_data_type *mfd,
 		goto register_fail;
 	}
 
-	ret  = mdss_bus_bandwidth_ctrl(1);
-	if (ret) {
-		pr_err("mdss iommu attach failed rc=%d", ret);
-		goto register_fail;
+	ret = mdss_iommu_ctrl(1);
+	if (IS_ERR_VALUE(ret)) {
+		pr_err("IOMMU attach failed\n");
+		goto fail_freebuf;
 	}
 
 	ret = mdss_mdp_data_map(&node->buf_data);
 	if (IS_ERR_VALUE(ret)) {
 		pr_err("error mapping buffer\n");
-		mdss_bus_bandwidth_ctrl(0);
+		mdss_iommu_ctrl(0);
 		goto fail_freebuf;
 	}
 
-	mdss_bus_bandwidth_ctrl(0);
+	mdss_iommu_ctrl(0);
 
 	memcpy(&node->buf_info, data, sizeof(*data));
 
@@ -898,19 +898,25 @@ int msm_fb_writeback_set_secure(struct fb_info *info, int enable)
 EXPORT_SYMBOL(msm_fb_writeback_set_secure);
 
 /**
- * msm_fb_writeback_iommu_ref() - Power ON/OFF mdp clock
- * @enable - true/false to Power ON/OFF mdp clock
+ * msm_fb_writeback_iommu_ref() - Add/Remove vote on MDSS IOMMU being attached.
+ * @enable - true adds vote on MDSS IOMMU, false removes the vote.
  *
- * Call to enable mdp clock at start of mdp_mmap/mdp_munmap API and
- * to disable mdp clock at end of these API's to ensure iommu is in
- * proper state while driver map/un-map any buffers.
+ * Call to vote on MDSS IOMMU being enabled. To ensure buffers are properly
+ * mapped to IOMMU context bank.
  */
 int msm_fb_writeback_iommu_ref(struct fb_info *info, int enable)
 {
-	if (enable)
-		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
-	else
-		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
+	int ret;
+
+	if (enable) {
+		ret = mdss_iommu_ctrl(1);
+		if (IS_ERR_VALUE(ret)) {
+			pr_err("IOMMU attach failed\n");
+			return ret;
+		}
+	} else {
+		mdss_iommu_ctrl(0);
+	}
 
 	return 0;
 }

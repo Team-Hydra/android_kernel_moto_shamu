@@ -415,7 +415,7 @@ static void mdm2ap_status_check(struct work_struct *work)
 	struct esoc_clink *esoc = mdm->esoc;
 	if (gpio_get_value(MDM_GPIO(mdm, MDM2AP_STATUS)) == 0) {
 		dev_dbg(dev, "MDM2AP_STATUS did not go high\n");
-		esoc_clink_evt_notify(ESOC_UNEXPECTED_RESET, esoc);
+		esoc_clink_evt_notify(ESOC_INVALID_STATE, esoc);
 	}
 }
 
@@ -530,8 +530,6 @@ static void mdm_notify(enum esoc_notify notify, struct esoc_clink *esoc)
 		gpio_direction_output(MDM_GPIO(mdm, AP2MDM_SOFT_RESET),
 				!!mdm->soft_reset_inverted);
 		mdelay(300);
-		gpio_direction_output(MDM_GPIO(mdm, AP2MDM_SOFT_RESET),
-				!mdm->soft_reset_inverted);
 		break;
 	};
 	return;
@@ -548,6 +546,7 @@ static irqreturn_t mdm_errfatal(int irq, void *dev_id)
 	dev = mdm->dev;
 	if (!mdm->ready)
 		goto mdm_pwroff_irq;
+	mdm->ready = false;
 	esoc = mdm->esoc;
 	dev_err(dev, "%s: mdm sent errfatal interrupt\n",
 					 __func__);
@@ -779,7 +778,6 @@ status_err:
 		}
 		mdm->pblrdy_irq = irq;
 	}
-	mdm_disable_irqs(mdm);
 pblrdy_err:
 	return 0;
 fatal_err:
@@ -797,9 +795,9 @@ static int mdm9x25_setup_hw(struct mdm_ctrl *mdm,
 
 	mdm->dev = &pdev->dev;
 	esoc = devm_kzalloc(mdm->dev, sizeof(*esoc), GFP_KERNEL);
-	if (IS_ERR(esoc)) {
+	if (!esoc) {
 		dev_err(mdm->dev, "cannot allocate esoc device\n");
-		return PTR_ERR(esoc);
+		return -ENOMEM;
 	}
 	mdm->mdm_queue = alloc_workqueue("mdm_queue", 0, 0);
 	if (!mdm->mdm_queue) {
@@ -851,9 +849,9 @@ static int mdm9x35_setup_hw(struct mdm_ctrl *mdm,
 	mdm->dev = &pdev->dev;
 	node = pdev->dev.of_node;
 	esoc = devm_kzalloc(mdm->dev, sizeof(*esoc), GFP_KERNEL);
-	if (IS_ERR(esoc)) {
+	if (!esoc) {
 		dev_err(mdm->dev, "cannot allocate esoc device\n");
-		return PTR_ERR(esoc);
+		return -ENOMEM;
 	}
 	mdm->mdm_queue = alloc_workqueue("mdm_queue", 0, 0);
 	if (!mdm->mdm_queue) {
@@ -949,8 +947,9 @@ static int mdm_probe(struct platform_device *pdev)
 		return PTR_ERR(match);
 	mdm_ops = match->data;
 	mdm = devm_kzalloc(&pdev->dev, sizeof(*mdm), GFP_KERNEL);
-	if (IS_ERR(mdm))
-		return PTR_ERR(mdm);
+	if (!mdm)
+		return -ENOMEM;
+
 	return mdm_ops->config_hw(mdm, mdm_ops->clink_ops, pdev);
 }
 

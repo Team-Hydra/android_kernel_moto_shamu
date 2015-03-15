@@ -1313,6 +1313,31 @@ int create_pkt_cmd_session_set_property(
 			sizeof(struct hfi_quantization_range);
 		break;
 	}
+	case HAL_PARAM_VENC_SEARCH_RANGE:
+	{
+		struct hfi_vc1e_perf_cfg_type *hfi;
+		struct hal_vc1e_perf_cfg_type *hal_mv_searchrange =
+			(struct hal_vc1e_perf_cfg_type *) pdata;
+		pkt->rg_property_data[0] =
+			HFI_PROPERTY_PARAM_VENC_VC1_PERF_CFG;
+		hfi = (struct hfi_vc1e_perf_cfg_type *)
+				&pkt->rg_property_data[1];
+		hfi->search_range_x_subsampled[0] =
+			hal_mv_searchrange->i_frame.x_subsampled;
+		hfi->search_range_x_subsampled[1] =
+			hal_mv_searchrange->p_frame.x_subsampled;
+		hfi->search_range_x_subsampled[2] =
+			hal_mv_searchrange->b_frame.x_subsampled;
+		hfi->search_range_y_subsampled[0] =
+			hal_mv_searchrange->i_frame.y_subsampled;
+		hfi->search_range_y_subsampled[1] =
+			hal_mv_searchrange->p_frame.y_subsampled;
+		hfi->search_range_y_subsampled[2] =
+			hal_mv_searchrange->b_frame.y_subsampled;
+		pkt->size += sizeof(u32) +
+			sizeof(struct hfi_vc1e_perf_cfg_type);
+		break;
+	}
 	case HAL_PARAM_VENC_MAX_NUM_B_FRAMES:
 	{
 		struct hfi_max_num_b_frames *hfi;
@@ -1638,7 +1663,7 @@ int create_pkt_cmd_session_set_property(
 		struct hfi_ltrmode *hfi;
 		struct hal_ltrmode *hal = pdata;
 		pkt->rg_property_data[0] =
-			HFI_PROPERTY_PARAM_VENC_H264_LTRMODE;
+			HFI_PROPERTY_PARAM_VENC_LTRMODE;
 		hfi = (struct hfi_ltrmode *) &pkt->rg_property_data[1];
 		hfi->ltrmode = get_hfi_ltr_mode(hal->ltrmode);
 		hfi->ltrcount = hal->ltrcount;
@@ -1651,7 +1676,7 @@ int create_pkt_cmd_session_set_property(
 		struct hfi_ltruse *hfi;
 		struct hal_ltruse *hal = pdata;
 		pkt->rg_property_data[0] =
-			HFI_PROPERTY_CONFIG_VENC_H264_USELTRFRAME;
+			HFI_PROPERTY_CONFIG_VENC_USELTRFRAME;
 		hfi = (struct hfi_ltruse *) &pkt->rg_property_data[1];
 		hfi->frames = hal->frames;
 		hfi->refltr = hal->refltr;
@@ -1664,18 +1689,42 @@ int create_pkt_cmd_session_set_property(
 		struct hfi_ltrmark *hfi;
 		struct hal_ltrmark *hal = pdata;
 		pkt->rg_property_data[0] =
-			HFI_PROPERTY_CONFIG_VENC_H264_MARKLTRFRAME;
+			HFI_PROPERTY_CONFIG_VENC_MARKLTRFRAME;
 		hfi = (struct hfi_ltrmark *) &pkt->rg_property_data[1];
 		hfi->markframe = hal->markframe;
+		pkt->size += sizeof(u32) + sizeof(struct hfi_ltrmark);
+		break;
+	}
+	case HAL_PARAM_VENC_HIER_P_MAX_ENH_LAYERS:
+	{
+		pkt->rg_property_data[0] =
+			HFI_PROPERTY_PARAM_VENC_HIER_P_MAX_NUM_ENH_LAYER;
+		pkt->rg_property_data[1] = *(u32 *)pdata;
 		pkt->size += sizeof(u32) * 2;
 		break;
 	}
-	case HAL_PARAM_VENC_HIER_P_NUM_FRAMES:
+	case HAL_CONFIG_VENC_HIER_P_NUM_FRAMES:
 	{
 		pkt->rg_property_data[0] =
-			HFI_PROPERTY_PARAM_VENC_HIER_P_NUM_ENH_LAYER;
+			HFI_PROPERTY_CONFIG_VENC_HIER_P_ENH_LAYER;
 		pkt->rg_property_data[1] = *(u32 *)pdata;
 		pkt->size += sizeof(u32) * 2;
+		break;
+	}
+	case HAL_PARAM_VPE_COLOR_SPACE_CONVERSION:
+	{
+		struct hfi_vpe_color_space_conversion *hfi = NULL;
+		struct hal_vpe_color_space_conversion *hal = pdata;
+		pkt->rg_property_data[0] =
+				HFI_PROPERTY_PARAM_VPE_COLOR_SPACE_CONVERSION;
+		hfi = (struct hfi_vpe_color_space_conversion *)
+			&pkt->rg_property_data[1];
+		memcpy(hfi->csc_matrix, hal->csc_matrix,
+				sizeof(hfi->csc_matrix));
+		memcpy(hfi->csc_bias, hal->csc_bias, sizeof(hfi->csc_bias));
+		memcpy(hfi->csc_limit, hal->csc_limit, sizeof(hfi->csc_limit));
+		pkt->size += sizeof(u32) +
+				sizeof(struct hfi_vpe_color_space_conversion);
 		break;
 	}
 	case HAL_PARAM_VENC_ENABLE_INITIAL_QP:

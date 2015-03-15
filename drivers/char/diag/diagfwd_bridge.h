@@ -31,12 +31,13 @@
 int diagfwd_connect_bridge(int);
 void connect_bridge(int, uint8_t);
 int diagfwd_disconnect_bridge(int);
-int diagfwd_bridge_init(int index);
+void diagfwd_bridge_init(int index);
 int diagfwd_bridge_dci_init(int index);
 void diagfwd_bridge_exit(void);
 void diagfwd_bridge_dci_exit(void);
 int diagfwd_read_complete_bridge(struct diag_request *diag_read_ptr);
-
+void diagfwd_bridge_notifier(void *priv, unsigned event,
+		struct diag_request *d_req);
 /* Diag-Bridge structure, n bridges can be used at same time
  * for instance SMUX, HSIC working at same time
  */

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +34,10 @@
 #define MAX_NUM_STATS_COMP_MASK 2
 #define MAX_INIT_FRAME_DROP 31
 #define ISP_Q2 (1 << 2)
+
+#define MAX_NUM_MAX_BUF_QUEUE 2
+#define VFE_DEFAULT_BUF_QUEUE 0
+#define VFE_SHARED_BUF_QUEUE  1
 
 #define AVTIMER_MSW_PHY_ADDR 0xFE05300C
 #define AVTIMER_LSW_PHY_ADDR 0xFE053008
@@ -143,11 +147,14 @@ struct msm_vfe_axi_ops {
 	uint32_t (*get_comp_mask) (uint32_t irq_status0, uint32_t irq_status1);
 	uint32_t (*get_pingpong_status) (struct vfe_device *vfe_dev);
 	long (*halt) (struct vfe_device *vfe_dev);
+	void (*update_cgc_override) (struct vfe_device *vfe_dev,
+		uint8_t wm_idx, uint8_t cgc_override);
 };
 
 struct msm_vfe_core_ops {
 	void (*reg_update) (struct vfe_device *vfe_dev);
 	long (*reset_hw) (struct vfe_device *vfe_dev);
+	long (*soft_reset_hw) (struct vfe_device *vfe_dev);
 	int (*init_hw) (struct vfe_device *vfe_dev);
 	void (*init_hw_reg) (struct vfe_device *vfe_dev);
 	void (*release_hw) (struct vfe_device *vfe_dev);
@@ -194,6 +201,9 @@ struct msm_vfe_stats_ops {
 	uint32_t (*get_wm_mask) (uint32_t irq_status0, uint32_t irq_status1);
 	uint32_t (*get_comp_mask) (uint32_t irq_status0, uint32_t irq_status1);
 	uint32_t (*get_pingpong_status) (struct vfe_device *vfe_dev);
+
+	void (*update_cgc_override) (struct vfe_device *vfe_dev,
+		uint32_t stats_mask, uint8_t enable);
 };
 
 struct msm_vfe_ops {
@@ -257,6 +267,15 @@ enum msm_vfe_axi_stream_type {
 	BURST_STREAM,
 };
 
+struct msm_vfe_frame_request_queue {
+	struct list_head list;
+	uint8_t request_frame_buff_q;
+	uint8_t need_divert;
+	uint8_t cmd_used;
+};
+
+#define MSM_VFE_REQUESTQ_SIZE 8
+
 struct msm_vfe_axi_stream {
 	uint32_t frame_id;
 	enum msm_vfe_axi_state state;
@@ -269,10 +288,15 @@ struct msm_vfe_axi_stream {
 	struct msm_isp_buffer *buf[2];
 	uint32_t session_id;
 	uint32_t stream_id;
-	uint32_t bufq_handle;
-	uint32_t bufq_scratch_handle;
+	uint32_t bufq_handle[MAX_NUM_MAX_BUF_QUEUE];
+	uint8_t controllable_output;
+	uint8_t request_frm_num;
+	uint8_t requestq_idx;
+	spinlock_t request_lock;
+	struct list_head request_q;
+	struct msm_vfe_frame_request_queue
+			request_queue_cmd[MSM_VFE_REQUESTQ_SIZE];
 	uint32_t stream_handle;
-	uint32_t request_frm_num;
 	uint8_t buf_divert;
 	enum msm_vfe_axi_stream_type stream_type;
 	uint32_t vt_enable;
@@ -313,6 +337,7 @@ struct msm_vfe_src_info {
 	uint32_t width;
 	long pixel_clock;
 	uint32_t input_format;/*V4L2 pix format with bayer pattern*/
+	struct timeval time_stamp;
 };
 
 enum msm_wm_ub_cfg_type {
@@ -367,6 +392,7 @@ struct msm_vfe_stats_stream {
 	uint32_t framedrop_pattern;
 	uint32_t framedrop_period;
 	uint32_t irq_subsample_pattern;
+	uint32_t init_stats_frame_drop;
 
 	uint32_t buffer_offset;
 	struct msm_isp_buffer *buf[2];
@@ -450,6 +476,7 @@ struct vfe_device {
 	uint8_t vt_enable;
 	void __iomem *p_avtimer_msw;
 	void __iomem *p_avtimer_lsw;
+	uint8_t ignore_error;
 };
 
 #endif

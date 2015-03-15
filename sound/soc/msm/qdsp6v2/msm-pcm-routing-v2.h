@@ -75,6 +75,7 @@ enum {
 	MSM_FRONTEND_DAI_MULTIMEDIA7,
 	MSM_FRONTEND_DAI_MULTIMEDIA8,
 	MSM_FRONTEND_DAI_MULTIMEDIA9,
+	MSM_FRONTEND_DAI_MULTIMEDIA10,
 	MSM_FRONTEND_DAI_CS_VOICE,
 	MSM_FRONTEND_DAI_VOIP,
 	MSM_FRONTEND_DAI_AFE_RX,
@@ -97,8 +98,8 @@ enum {
 	MSM_FRONTEND_DAI_MAX,
 };
 
-#define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_MULTIMEDIA9 + 1)
-#define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_MULTIMEDIA9
+#define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_MULTIMEDIA10 + 1)
+#define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_MULTIMEDIA10
 
 enum {
 	MSM_BACKEND_DAI_PRI_I2S_RX = 0,
@@ -145,6 +146,8 @@ enum {
 	MSM_BACKEND_DAI_SLIMBUS_6_RX,
 	MSM_BACKEND_DAI_SLIMBUS_6_TX,
 	MSM_BACKEND_DAI_SPDIF_RX,
+	MSM_BACKEND_DAI_TFA9890_STUB_LEFT_RX,
+	MSM_BACKEND_DAI_TFA9890_STUB_RIGHT_RX,
 	MSM_BACKEND_DAI_MAX,
 };
 
@@ -162,6 +165,14 @@ enum msm_pcm_routing_event {
 
 #define RELEASE_LOCK	0
 #define ACQUIRE_LOCK	1
+
+#define MSM_BACKEND_DAI_PP_PARAMS_REQ_MAX	1
+#define HDMI_RX_ID				0x8001
+#define ADM_PP_PARAM_MUTE_ID			0
+#define ADM_PP_PARAM_MUTE_BIT			1
+#define ADM_PP_PARAM_LATENCY_ID			1
+#define ADM_PP_PARAM_LATENCY_BIT		2
+
 struct msm_pcm_routing_evt {
 	void (*event_func)(enum msm_pcm_routing_event, void *);
 	void *priv_data;
@@ -178,6 +189,8 @@ struct msm_pcm_routing_bdai_data {
 	unsigned int  sample_rate;
 	unsigned int  channel;
 	unsigned int  format;
+	u32 compr_passthr_mode;
+	char *name;
 };
 
 struct msm_pcm_routing_fdai_data {
@@ -194,6 +207,9 @@ void msm_pcm_routing_reg_phy_stream(int fedai_id, int perf_mode, int dspst_id,
 	int stream_type);
 void msm_pcm_routing_reg_psthr_stream(int fedai_id, int dspst_id,
 		int stream_type);
+void msm_pcm_routing_reg_phy_compr_stream(int fedai_id, bool perf_mode,
+					  int dspst_id, int stream_type,
+					  uint32_t compr_passthr);
 
 void msm_pcm_routing_reg_phy_stream_v2(int fedai_id, bool perf_mode,
 				       int dspst_id, int stream_type,

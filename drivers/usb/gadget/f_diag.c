@@ -22,6 +22,11 @@
 
 #include <mach/usbdiag.h>
 
+#ifdef CONFIG_DIAG_OVER_TTY
+#include <mach/tty_diag.h>
+#include <linux/diagchar.h>
+#endif
+
 #include <linux/usb/composite.h>
 #include <linux/usb/gadget.h>
 #include <linux/workqueue.h>
@@ -167,6 +172,28 @@ struct diag_context {
 };
 
 static struct list_head diag_dev_list;
+static unsigned int diag_ch_index;
+
+#define MAX_DIAG_PORTS          2
+static struct usb_string diag_string_defs[MAX_DIAG_PORTS+1];
+
+static struct usb_gadget_strings diag_string_table = {
+	.language =             0x0409, /* en-us */
+	.strings =              diag_string_defs,
+};
+
+static struct usb_gadget_strings *diag_strings[] = {
+	&diag_string_table,
+	NULL,
+};
+
+#ifdef CONFIG_DIAG_OVER_TTY
+struct legacy_dev {
+	int   logging_mode_tty;
+	int   close_olddev;
+	unsigned int major;
+};
+#endif
 
 static inline struct diag_context *func_to_diag(struct usb_function *f)
 {
@@ -281,7 +308,15 @@ struct usb_diag_ch *usb_diag_open(const char *name, void *priv,
 	struct usb_diag_ch *ch;
 	unsigned long flags;
 	int found = 0;
+#ifdef CONFIG_DIAG_OVER_TTY
+	if (priv == NULL) {
+		pr_err("usb_diag_open can not open properly!\n");
+		return ERR_PTR(-ENODEV);
+	}
 
+	if (((struct legacy_dev *)priv)->logging_mode_tty == TTY_MODE)
+		return tty_diag_channel_open(name, priv, notify);
+#endif
 	spin_lock_irqsave(&ch_lock, flags);
 	/* Check if we already have a channel with this name */
 	list_for_each_entry(ch, &usb_diag_ch_list, list) {
@@ -322,6 +357,30 @@ void usb_diag_close(struct usb_diag_ch *ch)
 	struct diag_context *dev = NULL;
 	unsigned long flags;
 
+#ifdef CONFIG_DIAG_OVER_TTY
+	void *priv = ch->priv;
+	int close_olddev;
+	int logging_mode_tty;
+
+	if (priv == NULL) {
+		pr_err("usb_diag_close can not close properly!\n");
+		return;
+	}
+	close_olddev  = ((struct legacy_dev *)priv)->close_olddev;
+	logging_mode_tty = ((struct legacy_dev *)priv)->logging_mode_tty;
+	if (close_olddev == CLOSE_USB) {
+		goto usb_close;
+	} else if (close_olddev == CLOSE_TTY) {
+		tty_diag_channel_close(ch);
+		return;
+	} else {
+		if (logging_mode_tty == TTY_MODE) {
+			tty_diag_channel_close(ch);
+			return;
+		}
+	}
+usb_close:
+#endif
 	spin_lock_irqsave(&ch_lock, flags);
 	ch->priv = NULL;
 	ch->notify = NULL;
@@ -333,6 +392,7 @@ void usb_diag_close(struct usb_diag_ch *ch)
 	kfree(ch);
 
 	spin_unlock_irqrestore(&ch_lock, flags);
+
 }
 EXPORT_SYMBOL(usb_diag_close);
 
@@ -372,6 +432,17 @@ int usb_diag_alloc_req(struct usb_diag_ch *ch, int n_write, int n_read)
 	int i;
 	unsigned long flags;
 
+#ifdef CONFIG_DIAG_OVER_TTY
+	void *priv = ch->priv;
+
+	if (priv == NULL) {
+		pr_err("usb_diag_alloc_req  can not alloc properly!\n");
+		return -ENODEV;
+	}
+
+	if (((struct legacy_dev *)priv)->logging_mode_tty == TTY_MODE)
+		return 0;
+#endif
 	if (!ctxt)
 		return -ENODEV;
 
@@ -425,6 +496,18 @@ int usb_diag_read(struct usb_diag_ch *ch, struct diag_request *d_req)
 	struct usb_request *req;
 	struct usb_ep *out;
 	static DEFINE_RATELIMIT_STATE(rl, 10*HZ, 1);
+
+#ifdef CONFIG_DIAG_OVER_TTY
+	struct legacy_dev *priv = (struct legacy_dev *)ch->priv;
+	if (priv == NULL) {
+		pr_err("usb_diag_read can not read properly! name=%s\n",
+			ch->name);
+		return -ENODEV;
+	}
+
+	if (priv->logging_mode_tty == TTY_MODE)
+		return tty_diag_channel_read(ch, d_req);
+#endif
 
 	if (!ctxt)
 		return -ENODEV;
@@ -495,6 +578,16 @@ int usb_diag_write(struct usb_diag_ch *ch, struct diag_request *d_req)
 	struct usb_ep *in;
 	static DEFINE_RATELIMIT_STATE(rl, 10*HZ, 1);
 
+#ifdef CONFIG_DIAG_OVER_TTY
+	void *priv = ch->priv;
+	if (priv == NULL) {
+		pr_err("usb_diag_write can not write properly!\n");
+		return -ENODEV;
+	}
+
+	if (((struct legacy_dev *)priv)->logging_mode_tty == TTY_MODE)
+		return tty_diag_channel_write(ch, d_req);
+#endif
 	if (!ctxt)
 		return -ENODEV;
 
@@ -649,6 +742,8 @@ static void diag_function_unbind(struct usb_configuration *c,
 	free_reqs(ctxt);
 	spin_unlock_irqrestore(&ctxt->lock, flags);
 	kfree(ctxt);
+	if (diag_ch_index)
+		diag_ch_index--;
 }
 
 static int diag_function_bind(struct usb_configuration *c,
@@ -703,6 +798,8 @@ static int diag_function_bind(struct usb_configuration *c,
 			goto fail;
 	}
 	diag_update_pid_and_serial_num(ctxt);
+	if (++diag_ch_index >= MAX_DIAG_PORTS)
+		diag_ch_index = MAX_DIAG_PORTS-1;
 	return 0;
 fail:
 	if (f->ss_descriptors)
@@ -724,7 +821,7 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 {
 	struct diag_context *dev;
 	struct usb_diag_ch *_ch;
-	int found = 0, ret;
+	int found = 0, ret, status;
 
 	DBG(c->cdev, "diag_function_add\n");
 
@@ -744,6 +841,19 @@ int diag_function_add(struct usb_configuration *c, const char *name,
 		return -ENOMEM;
 
 	list_add_tail(&dev->list_item, &diag_dev_list);
+
+	if (diag_string_defs[diag_ch_index].id == 0) {
+		status = usb_string_id(c->cdev);
+		if (status < 0) {
+			pr_err("%s: failed to get string id, err:%d\n",
+					__func__, status);
+			return status;
+		}
+		diag_string_defs[diag_ch_index].id = status;
+	}
+	diag_string_defs[diag_ch_index].s = _ch->name;
+	intf_desc.iInterface = diag_string_defs[diag_ch_index].id;
+	dev->function.strings = diag_strings;
 
 	/*
 	 * A few diag devices can point to the same channel, in case that

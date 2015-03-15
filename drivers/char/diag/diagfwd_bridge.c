@@ -22,6 +22,7 @@
 #ifdef CONFIG_DIAG_OVER_USB
 #include <mach/usbdiag.h>
 #endif
+#include <mach/tty_diag.h>
 #include "diagchar.h"
 #include "diagmem.h"
 #include "diagfwd_cntl.h"
@@ -53,15 +54,21 @@ void connect_bridge(int process_cable, uint8_t index)
 	mutex_lock(&diag_bridge[index].bridge_mutex);
 	/* If the usb cable is being connected */
 	if (process_cable) {
-		err = usb_diag_alloc_req(diag_bridge[index].ch, N_MDM_WRITE,
-			       N_MDM_READ);
-		if (err)
-			pr_err("diag: unable to alloc USB req for ch %d err:%d\n",
-							 index, err);
+		if (driver->logging_mode == USB_MODE) {
+			if (driver->logging_mode_tty != TTY_MODE) {
+				err = usb_diag_alloc_req(diag_bridge[index].ch,
+					N_MDM_WRITE, N_MDM_READ);
+				if (err) {
+					pr_err("diag: unable to alloc USB req for");
+					pr_err(" ch %d err:%d\n", index, err);
+				}
+			} else {
 
+				diag_bridge[index].ch = driver->bridge_ch;
+			}
+		}
 		diag_bridge[index].usb_connected = 1;
 	}
-
 	if (index == SMUX) {
 		if (driver->diag_smux_enabled) {
 			driver->in_busy_smux = 0;
@@ -139,7 +146,7 @@ int diagfwd_disconnect_bridge(int process_cable)
 
 			if (i == SMUX) {
 				if (driver->diag_smux_enabled &&
-					driver->logging_mode == USB_MODE) {
+					(driver->logging_mode == USB_MODE)) {
 					driver->in_busy_smux = 1;
 					driver->lcid = LCID_INVALID;
 					driver->smux_connected = 0;
@@ -235,7 +242,7 @@ int diagfwd_read_complete_bridge(struct diag_request *diag_read_ptr)
 	return 0;
 }
 
-static void diagfwd_bridge_notifier(void *priv, unsigned event,
+void diagfwd_bridge_notifier(void *priv, unsigned event,
 					struct diag_request *d_req)
 {
 	int index;
@@ -251,14 +258,25 @@ static void diagfwd_bridge_notifier(void *priv, unsigned event,
 		break;
 	case USB_DIAG_READ_DONE:
 		index = (int)(d_req->context);
+		if (driver->logging_mode_tty == TTY_MODE) {
+			diag_bridge[index].usb_read_ptr->buf =
+				diag_bridge[index].usb_buf_out;
+			diag_bridge[index].usb_read_ptr->length =
+				USB_MAX_OUT_BUF;
+			usb_diag_read(diag_bridge[index].ch,
+					diag_bridge[index].usb_read_ptr);
+		}
 		queue_work(diag_bridge[index].wq,
 		&diag_bridge[index].usb_read_complete_work);
 		break;
 	case USB_DIAG_WRITE_DONE:
 		index = (int)(d_req->context);
+		if (driver->logging_mode_tty == TTY_MODE)
+			tty_diag_channel_abandon_request(diag_bridge[index].ch);
 		if (index == SMUX && driver->diag_smux_enabled)
 			diagfwd_write_complete_smux();
-		else if (diag_hsic[index].hsic_device_enabled)
+		else if (index < MAX_HSIC_CH &&
+					diag_hsic[index].hsic_device_enabled)
 			diagfwd_write_complete_hsic(d_req, index);
 		break;
 	default:
@@ -268,7 +286,7 @@ static void diagfwd_bridge_notifier(void *priv, unsigned event,
 	}
 }
 
-int diagfwd_bridge_init(int index)
+void diagfwd_bridge_init(int index)
 {
 	int ret;
 	unsigned char name[20];
@@ -278,8 +296,8 @@ int diagfwd_bridge_init(int index)
 	} else if (index == SMUX) {
 		strlcpy(name, "smux", sizeof(name));
 	} else {
-		pr_debug("diag: incorrect bridge instance: %d\n", index);
-		return 0;
+		pr_err("diag: incorrect bridge init, instance: %d\n", index);
+		return;
 	}
 
 	strlcpy(diag_bridge[index].name, name,
@@ -287,8 +305,6 @@ int diagfwd_bridge_init(int index)
 	strlcat(name, "_diag_wq", sizeof(diag_bridge[index].name));
 	diag_bridge[index].id = index;
 	diag_bridge[index].wq = create_singlethread_workqueue(name);
-	if (!diag_bridge[index].wq)
-		goto err;
 	diag_bridge[index].read_len = 0;
 	diag_bridge[index].write_len = 0;
 	if (diag_bridge[index].usb_buf_out == NULL)
@@ -316,7 +332,7 @@ int diagfwd_bridge_init(int index)
 		      diag_read_usb_hsic_work_fn);
 		if (index == HSIC_DATA_CH)
 			diag_bridge[index].ch = usb_diag_open(DIAG_MDM,
-				 (void *)index, diagfwd_bridge_notifier);
+				 (void *)driver, diagfwd_bridge_notifier);
 		if (IS_ERR(diag_bridge[index].ch)) {
 			pr_err("diag: Unable to open USB MDM ch = %d\n", index);
 			goto err;
@@ -329,7 +345,7 @@ int diagfwd_bridge_init(int index)
 #ifdef CONFIG_DIAG_OVER_USB
 		INIT_WORK(&(diag_bridge[index].diag_read_work),
 					 diag_read_usb_smux_work_fn);
-		diag_bridge[index].ch = usb_diag_open(DIAG_QSC, (void *)index,
+		diag_bridge[index].ch = usb_diag_open(DIAG_QSC, (void *)driver,
 					     diagfwd_bridge_notifier);
 		if (IS_ERR(diag_bridge[index].ch)) {
 			pr_err("diag: Unable to open USB diag QSC channel\n");
@@ -342,7 +358,7 @@ int diagfwd_bridge_init(int index)
 			pr_err("diag: could not register SMUX device, ret: %d\n",
 									 ret);
 	}
-	 return 0;
+	 return;
 err:
 	pr_err("diag: Could not initialize for bridge forwarding\n");
 	kfree(diag_bridge[index].usb_buf_out);
@@ -351,7 +367,7 @@ err:
 	kfree(diag_bridge[index].usb_read_ptr);
 	if (diag_bridge[index].wq)
 		destroy_workqueue(diag_bridge[index].wq);
-	return -ENOMEM;
+	return;
 }
 
 void diagfwd_bridge_exit(void)
@@ -405,12 +421,10 @@ int diagfwd_bridge_dci_init(int index)
 	 * diag_bridge_dci[index].enabled is used to check if a particular
 	 * bridge instance is initialized.
 	 */
-	if (index == HSIC_DCI_CH) {
+	if (index == HSIC_DCI_CH)
 		strlcpy(name, "hsic_dci", sizeof(name));
-	} else {
-		pr_debug("diag: incorrect dci bridge instance: %d\n", index);
+	else
 		return 0;
-	}
 
 	strlcpy(diag_bridge_dci[index].name, name,
 		sizeof(diag_bridge_dci[index].name));

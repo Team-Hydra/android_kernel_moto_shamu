@@ -29,7 +29,7 @@
 #define CYCLES_PER_MICRO_SEC 4915
 #define CCI_MAX_DELAY 10000
 
-#define CCI_TIMEOUT msecs_to_jiffies(100)
+#define CCI_TIMEOUT msecs_to_jiffies(200)
 
 /* TODO move this somewhere else */
 #define MSM_CCI_DRV_NAME "msm_cci"
@@ -46,7 +46,6 @@
 #define CCI_I2C_READ_MAX_RETRIES 3
 #define CCI_I2C_MAX_READ 8192
 #define CCI_I2C_MAX_WRITE 8192
-#define CCI_NUM_CLK_MAX		16
 
 static struct v4l2_subdev *g_cci_subdev;
 
@@ -101,35 +100,29 @@ static void msm_cci_set_clk_param(struct cci_device *cci_dev,
 static void msm_cci_flush_queue(struct cci_device *cci_dev,
 	enum cci_i2c_master_t master)
 {
-	int32_t rc = 0;
+	unsigned long rc = 0;
 
 	msm_camera_io_w(1 << master, cci_dev->base + CCI_HALT_REQ_ADDR);
-	rc = wait_for_completion_interruptible_timeout(
+	rc = wait_for_completion_timeout(
 		&cci_dev->cci_master_info[master].reset_complete, CCI_TIMEOUT);
-	if (rc < 0) {
-		pr_err("%s:%d wait failed\n", __func__, __LINE__);
-	} else if (rc == 0) {
-		pr_err("%s:%d wait timeout\n", __func__, __LINE__);
+	CDBG("%s:%d return %ld", __func__, __LINE__, rc);
 
-		/* Set reset pending flag to TRUE */
-		cci_dev->cci_master_info[master].reset_pending = TRUE;
+	/* Set reset pending flag to TRUE */
+	cci_dev->cci_master_info[master].reset_pending = TRUE;
 
-		/* Set proper mask to RESET CMD address based on MASTER */
-		if (master == MASTER_0)
-			msm_camera_io_w(CCI_M0_RESET_RMSK,
-				cci_dev->base + CCI_RESET_CMD_ADDR);
-		else
-			msm_camera_io_w(CCI_M1_RESET_RMSK,
-				cci_dev->base + CCI_RESET_CMD_ADDR);
+	/* Set proper mask to RESET CMD address based on MASTER */
+	if (master == MASTER_0)
+		msm_camera_io_w(CCI_M0_RESET_RMSK,
+			cci_dev->base + CCI_RESET_CMD_ADDR);
+	else
+		msm_camera_io_w(CCI_M1_RESET_RMSK,
+			cci_dev->base + CCI_RESET_CMD_ADDR);
 
-		/* wait for reset done irq */
-		rc = wait_for_completion_interruptible_timeout(
-			&cci_dev->cci_master_info[master].reset_complete,
-			CCI_TIMEOUT);
-		if (rc <= 0)
-			pr_err("%s:%d wait failed %d\n", __func__, __LINE__,
-				rc);
-	}
+	/* wait for reset done irq */
+	rc = wait_for_completion_timeout(
+		&cci_dev->cci_master_info[master].reset_complete,
+		CCI_TIMEOUT);
+	CDBG("%s:%d return %ld", __func__, __LINE__, rc);
 	return;
 }
 
@@ -162,17 +155,15 @@ static int32_t msm_cci_validate_queue(struct cci_device *cci_dev,
 		reg_val = 1 << ((master * 2) + queue);
 		CDBG("%s:%d CCI_QUEUE_START_ADDR\n", __func__, __LINE__);
 		msm_camera_io_w(reg_val, cci_dev->base + CCI_QUEUE_START_ADDR);
-		CDBG("%s line %d wait_for_completion_interruptible\n",
+		CDBG("%s line %d wait_for_completion_timeout\n",
 			__func__, __LINE__);
-		rc = wait_for_completion_interruptible_timeout(&cci_dev->
-			cci_master_info[master].reset_complete, CCI_TIMEOUT);
-		if (rc <= 0) {
-			pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
+
+		if (wait_for_completion_timeout(&cci_dev->
+			cci_master_info[master].reset_complete, CCI_TIMEOUT) == 0) {
+			pr_err("%s:%d wait_for_completion_timeout\n",
 				 __func__, __LINE__);
-			if (rc == 0)
-				rc = -ETIMEDOUT;
 			msm_cci_flush_queue(cci_dev, master);
-			return rc;
+			return -ETIMEDOUT;
 		}
 		rc = cci_dev->cci_master_info[master].status;
 		if (rc < 0)
@@ -407,21 +398,20 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 
 	val = 1 << ((master * 2) + queue);
 	msm_camera_io_w(val, cci_dev->base + CCI_QUEUE_START_ADDR);
-	CDBG("%s:%d E wait_for_completion_interruptible_timeout\n", __func__,
+	CDBG("%s:%d E wait_for_completion_timeout\n", __func__,
 		__LINE__);
-	rc = wait_for_completion_interruptible_timeout(&cci_dev->
-		cci_master_info[master].reset_complete, CCI_TIMEOUT);
-	if (rc <= 0) {
-		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
+	if (wait_for_completion_timeout(&cci_dev->
+		cci_master_info[master].reset_complete, CCI_TIMEOUT) == 0) {
+		pr_err("%s:%d wait_for_completion_timeout\n",
 			 __func__, __LINE__);
-		if (rc == 0)
-			rc = -ETIMEDOUT;
+
+		rc = -ETIMEDOUT;
 		msm_cci_flush_queue(cci_dev, master);
 		goto ERROR;
 	} else {
 		rc = 0;
 	}
-	CDBG("%s:%d E wait_for_completion_interruptible_timeout\n", __func__,
+	CDBG("%s:%d E wait_for_completion_timeout\n", __func__,
 		__LINE__);
 
 	read_words = msm_camera_io_r(cci_dev->base +
@@ -612,21 +602,20 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 	CDBG("%s:%d CCI_QUEUE_START_ADDR\n", __func__, __LINE__);
 	msm_camera_io_w(val, cci_dev->base + CCI_QUEUE_START_ADDR);
 
-	CDBG("%s:%d E wait_for_completion_interruptible\n",
+	CDBG("%s:%d E wait_for_completion_timeout\n",
 		__func__, __LINE__);
-	rc = wait_for_completion_interruptible_timeout(&cci_dev->
-		cci_master_info[master].reset_complete, CCI_TIMEOUT);
-	if (rc <= 0) {
-		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
+	if (wait_for_completion_timeout(&cci_dev->
+		cci_master_info[master].reset_complete, CCI_TIMEOUT) == 0) {
+		pr_err("%s:%d wait_for_completion_timeout\n",
 			 __func__, __LINE__);
-		if (rc == 0)
-			rc = -ETIMEDOUT;
+
+		rc = -ETIMEDOUT;
 		msm_cci_flush_queue(cci_dev, master);
 		goto ERROR;
 	} else {
 		rc = cci_dev->cci_master_info[master].status;
 	}
-	CDBG("%s:%d X wait_for_completion_interruptible\n", __func__,
+	CDBG("%s:%d X wait_for_completion_timeout\n", __func__,
 		__LINE__);
 
 ERROR:
@@ -648,6 +637,69 @@ static int msm_cci_subdev_g_chip_ident(struct v4l2_subdev *sd,
 }
 
 
+static void msm_cci_ioreg_enable(struct v4l2_subdev *sd)
+{
+	int rc;
+	uint32_t vddio_voltage;
+	struct cci_device *cci_dev = v4l2_get_subdevdata(sd);
+	struct device *dev;
+
+	if (!cci_dev)
+		return;
+
+	dev = &cci_dev->pdev->dev;
+
+	if (!dev->of_node)
+		return;
+
+	if (!cci_dev->ioreg) {
+		cci_dev->ioreg = regulator_get(dev, "vddio");
+		if (IS_ERR(cci_dev->ioreg)) {
+			pr_warn("%s failed to get regulator\n", __func__);
+			goto fail1;
+		}
+
+		/* set voltage if present in dt */
+		rc = of_property_read_u32(dev->of_node, "vddio-voltage",
+				&vddio_voltage);
+		if (rc >= 0) {
+			rc = regulator_set_voltage(cci_dev->ioreg,
+					vddio_voltage, vddio_voltage);
+			if (rc < 0) {
+				pr_debug("%s failed to set voltage (%d)\n",
+						__func__, rc);
+				goto fail2;
+			}
+		}
+
+		rc = regulator_enable(cci_dev->ioreg);
+		if (rc < 0) {
+			pr_warn("%s failed to enable (%d)\n", __func__, rc);
+			goto fail2;
+		}
+	}
+	return;
+
+fail2:
+	regulator_put(cci_dev->ioreg);
+fail1:
+	cci_dev->ioreg = NULL;
+}
+
+static void msm_cci_ioreg_disable(struct v4l2_subdev *sd)
+{
+	struct cci_device *cci_dev = v4l2_get_subdevdata(sd);
+
+	if (!cci_dev)
+		return;
+
+	if (cci_dev->ioreg) {
+		regulator_disable(cci_dev->ioreg);
+		regulator_put(cci_dev->ioreg);
+		cci_dev->ioreg = NULL;
+	}
+}
+
 static int32_t msm_cci_init(struct v4l2_subdev *sd,
 	struct msm_camera_cci_ctrl *c_ctrl)
 {
@@ -656,7 +708,6 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 	struct cci_device *cci_dev;
 	enum cci_i2c_master_t master;
 	cci_dev = v4l2_get_subdevdata(sd);
-
 	if (!cci_dev || !c_ctrl) {
 		pr_err("%s:%d failed: invalid params %p %p\n", __func__,
 			__LINE__, cci_dev, c_ctrl);
@@ -668,6 +719,7 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 		CDBG("%s ref_count %d\n", __func__, cci_dev->ref_count);
 		master = c_ctrl->cci_info->cci_i2c_master;
 		CDBG("%s:%d master %d\n", __func__, __LINE__, master);
+		msm_cci_set_clk_param(cci_dev, c_ctrl);
 		if (master < MASTER_MAX && master >= 0) {
 			mutex_lock(&cci_dev->cci_master_info[master].mutex);
 			/* Set reset pending flag to TRUE */
@@ -680,7 +732,7 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 				msm_camera_io_w(CCI_M1_RESET_RMSK,
 					cci_dev->base + CCI_RESET_CMD_ADDR);
 			/* wait for reset done irq */
-			rc = wait_for_completion_interruptible_timeout(
+			rc = wait_for_completion_timeout(
 				&cci_dev->cci_master_info[master].
 				reset_complete,
 				CCI_TIMEOUT);
@@ -691,10 +743,12 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 		}
 		return 0;
 	}
-	rc = msm_camera_request_gpio_table(cci_dev->cci_gpio_tbl,
-		cci_dev->cci_gpio_tbl_size, 1);
+
+	msm_cci_ioreg_enable(sd);
+
+	rc = msm_camera_request_mux_gpio_table(&cci_dev->pdev->dev,
+		cci_dev->cci_gpio_tbl, cci_dev->cci_gpio_tbl_size, 1);
 	if (rc < 0) {
-		cci_dev->ref_count--;
 		CDBG("%s: request gpio failed\n", __func__);
 		goto request_gpio_failed;
 	}
@@ -702,7 +756,6 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 	rc = msm_cam_clk_enable(&cci_dev->pdev->dev, cci_clk_info,
 		cci_dev->cci_clk, cci_dev->num_clk, 1);
 	if (rc < 0) {
-		cci_dev->ref_count--;
 		CDBG("%s: clk enable failed\n", __func__);
 		goto clk_enable_failed;
 	}
@@ -715,11 +768,11 @@ static int32_t msm_cci_init(struct v4l2_subdev *sd,
 	cci_dev->cci_master_info[MASTER_0].reset_pending = TRUE;
 	msm_camera_io_w(CCI_RESET_CMD_RMSK, cci_dev->base + CCI_RESET_CMD_ADDR);
 	msm_camera_io_w(0x1, cci_dev->base + CCI_RESET_CMD_ADDR);
-	rc = wait_for_completion_interruptible_timeout(
+	rc = wait_for_completion_timeout(
 		&cci_dev->cci_master_info[MASTER_0].reset_complete,
 		CCI_TIMEOUT);
 	if (rc <= 0) {
-		pr_err("%s: wait_for_completion_interruptible_timeout %d\n",
+		pr_err("%s: wait_for_completion_timeout %d\n",
 			 __func__, __LINE__);
 		if (rc == 0)
 			rc = -ETIMEDOUT;
@@ -743,9 +796,10 @@ reset_complete_failed:
 	msm_cam_clk_enable(&cci_dev->pdev->dev, cci_clk_info,
 		cci_dev->cci_clk, cci_dev->num_clk, 0);
 clk_enable_failed:
-	msm_camera_request_gpio_table(cci_dev->cci_gpio_tbl,
-		cci_dev->cci_gpio_tbl_size, 0);
+	msm_camera_request_mux_gpio_table(&cci_dev->pdev->dev,
+		cci_dev->cci_gpio_tbl, cci_dev->cci_gpio_tbl_size, 0);
 request_gpio_failed:
+	msm_cci_ioreg_disable(sd);
 	cci_dev->ref_count--;
 	return rc;
 }
@@ -772,11 +826,14 @@ static int32_t msm_cci_release(struct v4l2_subdev *sd)
 	msm_cam_clk_enable(&cci_dev->pdev->dev, cci_clk_info,
 		cci_dev->cci_clk, cci_dev->num_clk, 0);
 
-	msm_camera_request_gpio_table(cci_dev->cci_gpio_tbl,
-		cci_dev->cci_gpio_tbl_size, 0);
+	msm_camera_request_mux_gpio_table(&cci_dev->pdev->dev,
+		cci_dev->cci_gpio_tbl, cci_dev->cci_gpio_tbl_size, 0);
 
 	for (i = 0; i < MASTER_MAX; i++)
 		cci_dev->master_clk_init[i] = 0;
+
+	msm_cci_ioreg_disable(sd);
+
 	cci_dev->cci_state = CCI_STATE_DISABLED;
 
 	return 0;
@@ -1171,7 +1228,7 @@ static int msm_cci_probe(struct platform_device *pdev)
 {
 	struct cci_device *new_cci_dev;
 	int rc = 0;
-	pr_err("%s: pdev %p device id = %d\n", __func__, pdev, pdev->id);
+	CDBG("%s: pdev %p device id = %d\n", __func__, pdev, pdev->id);
 	new_cci_dev = kzalloc(sizeof(struct cci_device), GFP_KERNEL);
 	if (!new_cci_dev) {
 		CDBG("%s: no enough memory\n", __func__);

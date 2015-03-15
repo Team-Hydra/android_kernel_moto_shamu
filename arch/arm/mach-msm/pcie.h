@@ -40,6 +40,7 @@
 #define PCIE_LOG_PAGES (50)
 
 #define PCIE_DBG(dev, fmt, arg...) do {			 \
+<<<<<<< HEAD
 	if ((dev) && (dev)->ipc_log_long)   \
 		ipc_log_string((dev)->ipc_log_long, \
 			"DBG1:%s: " fmt, __func__, arg); \
@@ -258,6 +259,7 @@ extern void msm_pcie_disable(struct msm_pcie_dev_t *dev, u32 options);
 extern void msm_pcie_cfg_recover(struct msm_pcie_dev_t *dev, bool rc);
 extern void msm_pcie_config_msi_controller(struct msm_pcie_dev_t *dev);
 extern int32_t msm_pcie_irq_init(struct msm_pcie_dev_t *dev);
+extern int32_t msm_pcie_wake_irq_init(struct msm_pcie_dev_t *dev);
 extern void msm_pcie_irq_deinit(struct msm_pcie_dev_t *dev);
 extern int msm_pcie_get_debug_mask(void);
 extern bool msm_pcie_confirm_linkup(struct msm_pcie_dev_t *dev,

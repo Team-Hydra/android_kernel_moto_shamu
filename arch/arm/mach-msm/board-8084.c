@@ -48,6 +48,7 @@ static struct of_dev_auxdata apq8084_auxdata_lookup[] __initdata = {
 	OF_DEV_AUXDATA("qcom,xhci-msm-hsic", 0xf9c00000, "msm_hsic_host", NULL),
 	OF_DEV_AUXDATA("qcom,msm_pcie", 0xFC520000, "msm_pcie.1", NULL),
 	OF_DEV_AUXDATA("qcom,msm_pcie", 0xFC528000, "msm_pcie.2", NULL),
+	OF_DEV_AUXDATA("ti,c55-ctrl", 0x0, "c55_ctrl", NULL),
 	{}
 };
 
@@ -105,7 +106,10 @@ void __init apq8084_init(void)
 	if (socinfo_init() < 0)
 		pr_err("%s: socinfo_init() failed\n", __func__);
 
-	apq8084_init_gpiomux();
+	if (platform_is_apq8084_moto())
+		msm_gpiomux_init_dt();
+	else
+		apq8084_init_gpiomux();
 	apq8084_add_drivers();
 }
 

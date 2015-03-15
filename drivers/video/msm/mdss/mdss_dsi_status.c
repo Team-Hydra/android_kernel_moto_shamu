@@ -30,13 +30,13 @@
 #include "mdss_panel.h"
 #include "mdss_mdp.h"
 
-#define STATUS_CHECK_INTERVAL 5000
+#define STATUS_CHECK_INTERVAL 8000
+#define STATUS_CHECK_INTERVAL_MIN 200
 
 struct dsi_status_data {
 	struct notifier_block fb_notifier;
 	struct delayed_work check_status;
 	struct msm_fb_data_type *mfd;
-	uint32_t check_interval;
 };
 struct dsi_status_data *pstatus_data;
 static uint32_t interval = STATUS_CHECK_INTERVAL;
@@ -84,15 +84,27 @@ static void check_dsi_ctrl_status(struct work_struct *work)
 		return;
 	}
 
+	if (!pdata->panel_info.cont_splash_esd_rdy) {
+		pr_warn("%s: Splash not complete, reschedule check status\n",
+			__func__);
+		schedule_delayed_work(&pdsi_status->check_status,
+				msecs_to_jiffies(interval));
+		return;
+	}
+
 	mdp5_data = mfd_to_mdp5_data(pdsi_status->mfd);
 	ctl = mfd_to_ctl(pdsi_status->mfd);
+	if (!ctl) {
+		pr_warn("%s: mdss_mdp_ctl data not available\n", __func__);
+		return;
+	}
 
+	mutex_lock(&ctl->offlock);
 	if (ctl->shared_lock)
 		mutex_lock(ctl->shared_lock);
-	mutex_lock(&mdp5_data->ov_lock);
 
 	if (pdsi_status->mfd->shutdown_pending) {
-		mutex_unlock(&mdp5_data->ov_lock);
+		mutex_unlock(&ctl->offlock);
 		if (ctl->shared_lock)
 			mutex_unlock(ctl->shared_lock);
 		pr_err("%s: DSI turning off, avoiding BTA status check\n",
@@ -100,33 +112,18 @@ static void check_dsi_ctrl_status(struct work_struct *work)
 		return;
 	}
 
-	/*
-	 * For the command mode panels, we return pan display
-	 * IOCTL on vsync interrupt. So, after vsync interrupt comes
-	 * and when DMA_P is in progress, if the panel stops responding
-	 * and if we trigger BTA before DMA_P finishes, then the DSI
-	 * FIFO will not be cleared since the DSI data bus control
-	 * doesn't come back to the host after BTA. This may cause the
-	 * display reset not to be proper. Hence, wait for DMA_P done
-	 * for command mode panels before triggering BTA.
-	 */
-	if (ctl->wait_pingpong)
-		ctl->wait_pingpong(ctl, NULL);
-
-	pr_debug("%s: DSI ctrl wait for ping pong done\n", __func__);
-
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
 	ret = ctrl_pdata->check_status(ctrl_pdata);
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF, false);
 
-	mutex_unlock(&mdp5_data->ov_lock);
 	if (ctl->shared_lock)
 		mutex_unlock(ctl->shared_lock);
+	mutex_unlock(&ctl->offlock);
 
-	if (mdss_fb_is_power_on_interactive(mfd)) {
+	if (mdss_fb_is_power_on_interactive(pdsi_status->mfd)) {
 		if (ret > 0) {
 			schedule_delayed_work(&pdsi_status->check_status,
-				msecs_to_jiffies(pdsi_status->check_interval));
+				msecs_to_jiffies(interval));
 		} else {
 			char *envp[2] = {"PANEL_ALIVE=0", NULL};
 			pdata->panel_info.panel_dead = true;
@@ -159,12 +156,24 @@ static int fb_event_callback(struct notifier_block *self,
 		int *blank = evdata->data;
 		struct dsi_status_data *pdata = container_of(self,
 				struct dsi_status_data, fb_notifier);
+		struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
 		pdata->mfd = evdata->info->par;
+		ctrl_pdata = container_of(dev_get_platdata(&pdata->mfd->pdev->dev),
+					struct mdss_dsi_ctrl_pdata, panel_data);
+		if (!ctrl_pdata) {
+			pr_err("%s: DSI ctrl not available\n", __func__);
+			return NOTIFY_BAD;
+		}
+		if (ctrl_pdata->check_status_disabled) {
+			pr_debug("%s: status_check disabled\n", __func__);
+			return NOTIFY_DONE;
+		}
 
 		switch (*blank) {
 		case FB_BLANK_UNBLANK:
 			schedule_delayed_work(&pdata->check_status,
-				msecs_to_jiffies(pdata->check_interval));
+				msecs_to_jiffies(interval));
 			break;
 		case FB_BLANK_POWERDOWN:
 			cancel_delayed_work(&pdata->check_status);
@@ -172,6 +181,26 @@ static int fb_event_callback(struct notifier_block *self,
 		}
 	}
 	return 0;
+}
+
+static int param_set_interval(const char *val, struct kernel_param *kp)
+{
+	int ret = 0;
+	int int_val;
+
+	ret = kstrtos32(val, 0, &int_val);
+	if (ret)
+		return ret;
+	if (int_val < STATUS_CHECK_INTERVAL_MIN) {
+		pr_err("%s: Invalid value %d used, ignoring\n",
+						__func__, int_val);
+		ret = -EINVAL;
+	} else {
+		pr_info("%s: Set check interval to %d msecs\n",
+						__func__, int_val);
+		*((int *)kp->arg) = int_val;
+	}
+	return ret;
 }
 
 int __init mdss_dsi_status_init(void)
@@ -194,7 +223,6 @@ int __init mdss_dsi_status_init(void)
 		return -EPERM;
 	}
 
-	pstatus_data->check_interval = interval;
 	pr_info("%s: DSI status check interval:%d\n", __func__,	interval);
 
 	INIT_DELAYED_WORK(&pstatus_data->check_status, check_dsi_ctrl_status);
@@ -212,7 +240,8 @@ void __exit mdss_dsi_status_exit(void)
 	pr_debug("%s: DSI ctrl status work queue removed\n", __func__);
 }
 
-module_param(interval, uint, 0);
+module_param_call(interval, param_set_interval, param_get_uint,
+							&interval, 0644);
 MODULE_PARM_DESC(interval,
 		"Duration in milliseconds to send BTA command for checking"
 		"DSI status periodically");

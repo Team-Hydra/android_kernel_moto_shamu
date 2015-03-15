@@ -41,10 +41,12 @@
 #include <linux/pm_wakeup.h>
 #include <linux/power_supply.h>
 #include <linux/qpnp/qpnp-adc.h>
+#include <linux/qpnp/pin.h>
 #include <linux/cdev.h>
 #include <linux/completion.h>
 #include <linux/clk/msm-clk.h>
 #include <soc/qcom/scm.h>
+#include <linux/of_gpio.h>
 
 #include <mach/rpm-regulator.h>
 #include <mach/msm_bus.h>
@@ -78,7 +80,7 @@ module_param(override_phy_init, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(override_phy_init, "Override HSPHY Init Seq");
 
 /* Enable Proprietary charger detection */
-static bool prop_chg_detect;
+static bool prop_chg_detect = true;
 module_param(prop_chg_detect, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(prop_chg_detect, "Enable Proprietary charger detection");
 
@@ -117,6 +119,10 @@ struct dwc3_msm_scm_cmd_buf {
 	unsigned int device_id;
 	unsigned int spare;
 };
+
+#define DWC3_ID_STATUS_DELAY        150 /* 150 msec */
+#define DWC3_ID_GND_THRESH          400000  /* 400 mV */
+#define DWC3_ID_DEFAULT_VOLTS       1000000 /* 1V */
 
 struct dwc3_msm_req_complete {
 	struct list_head list_item;
@@ -162,7 +168,13 @@ struct dwc3_msm {
 	struct delayed_work	chg_work;
 	enum usb_chg_state	chg_state;
 	int			pmic_id_irq;
-	struct work_struct	id_work;
+	bool                    id_irq_enabled;
+	unsigned int		pmic_id_gpio;
+	unsigned int		pmic_id_vin;
+	unsigned int		pmic_id_pull;
+	unsigned int		pmic_id_amux_chan;
+	struct delayed_work	id_work;
+	struct qpnp_vadc_chip   *vadc_dev;
 	struct qpnp_adc_tm_btm_param	adc_param;
 	struct qpnp_adc_tm_chip *adc_tm_dev;
 	struct delayed_work	init_adc_work;
@@ -200,6 +212,8 @@ struct dwc3_msm {
 
 	unsigned int		irq_to_affin;
 	struct notifier_block	dwc3_cpu_notifier;
+	bool defer_read_id;
+	atomic_t		hs_phy_irq_wake;
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -1104,6 +1118,17 @@ static bool dwc3_chg_det_check_linestate(struct dwc3_msm *mdwc)
 	return chg_det & (3 << 8);
 }
 
+static u32 dwc3_msm_get_linestate(struct dwc3_charger *charger)
+{
+	struct dwc3_msm *mdwc = container_of(charger, struct dwc3_msm, charger);
+	u32 linestate;
+
+	linestate = dwc3_msm_read_reg_field(mdwc->base, CHARGING_DET_OUTPUT_REG,
+								(3 << 8));
+	pr_debug("line state in chg_det_output_reg = 0x%08x\n", linestate);
+	return linestate;
+}
+
 static bool dwc3_chg_det_check_output(struct dwc3_msm *mdwc)
 {
 	u32 chg_det;
@@ -1263,7 +1288,7 @@ static void dwc3_chg_detect_work(struct work_struct *w)
 			dwc3_msm_write_readback(mdwc->base,
 					CHARGING_DET_CTRL_REG, 0x1F, 0x10);
 			if (mdwc->ext_chg_opened) {
-				init_completion(&mdwc->ext_chg_wait);
+				complete(&mdwc->ext_chg_wait);
 				mdwc->ext_chg_active = true;
 			}
 		}
@@ -1417,8 +1442,10 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	if (mdwc->hs_phy_irq) {
 		enable_irq(mdwc->hs_phy_irq);
 		/* with DCP we dont require wakeup using HS_PHY_IRQ */
-		if (dcp)
+		if (dcp && atomic_read(&mdwc->hs_phy_irq_wake)) {
+			atomic_set(&mdwc->hs_phy_irq_wake, 0);
 			disable_irq_wake(mdwc->hs_phy_irq);
+		}
 	}
 
 	return 0;
@@ -1516,8 +1543,10 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 		mdwc->lpm_irq_seen = false;
 	}
 	/* it must DCP disconnect, re-enable HS_PHY wakeup IRQ */
-	if (mdwc->hs_phy_irq && dcp)
+	if (mdwc->hs_phy_irq && dcp && !atomic_read(&mdwc->hs_phy_irq_wake)) {
+		atomic_set(&mdwc->hs_phy_irq_wake, 1);
 		enable_irq_wake(mdwc->hs_phy_irq);
+	}
 
 	dev_info(mdwc->dev, "DWC3 exited from low power mode\n");
 
@@ -1690,6 +1719,64 @@ static irqreturn_t msm_dwc3_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static int
+get_prop_usbid_voltage_now(struct dwc3_msm *mdwc)
+{
+	int rc = 0;
+	struct qpnp_vadc_result results;
+	struct qpnp_pin_cfg id_pin_cfg;
+	int enable_id = 0;
+	int id_voltage;
+
+	/* Disable ID irq before voltage measurement to prevent triggering */
+	if (mdwc->id_irq_enabled) {
+		disable_irq(mdwc->pmic_id_irq);
+		mdwc->id_irq_enabled = false;
+		enable_id = 1;
+	}
+
+	/* Switch ID Pin to Analog IN */
+	memset(&id_pin_cfg, 0 , sizeof(id_pin_cfg));
+	id_pin_cfg.mode = QPNP_PIN_MODE_AIN;
+	id_pin_cfg.ain_route = mdwc->pmic_id_amux_chan;
+	id_pin_cfg.master_en  = QPNP_PIN_MASTER_ENABLE;
+	qpnp_pin_config(mdwc->pmic_id_gpio, &id_pin_cfg);
+
+	if (IS_ERR_OR_NULL(mdwc->vadc_dev)) {
+		mdwc->vadc_dev = qpnp_get_vadc(mdwc->dev, "dwc3-usb");
+		if (IS_ERR(mdwc->vadc_dev)) {
+			id_voltage = DWC3_ID_DEFAULT_VOLTS;
+			goto reset_pin;
+		}
+	}
+
+	rc = qpnp_vadc_read(mdwc->vadc_dev, P_MUX2_1_1, &results);
+	if (rc) {
+		pr_err("Unable to read usbid rc=%d\n", rc);
+		id_voltage =  DWC3_ID_DEFAULT_VOLTS;
+	} else {
+		id_voltage = results.physical;
+	}
+
+reset_pin:
+	/* Switch ID Pin to Digital IN */
+	memset(&id_pin_cfg, 0 , sizeof(id_pin_cfg));
+	id_pin_cfg.mode = QPNP_PIN_MODE_DIG_IN;
+	id_pin_cfg.vin_sel = mdwc->pmic_id_vin;
+	id_pin_cfg.pull = mdwc->pmic_id_pull;
+	id_pin_cfg.master_en  = QPNP_PIN_MASTER_ENABLE;
+	qpnp_pin_config(mdwc->pmic_id_gpio, &id_pin_cfg);
+
+	/* Leave ID irq enabled if enabled before voltage measurement */
+	if (enable_id) {
+		enable_irq(mdwc->pmic_id_irq);
+		mdwc->id_irq_enabled = true;
+	}
+
+	pr_debug("id_voltage = %d\n", id_voltage);
+	return id_voltage;
+}
+
 static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  union power_supply_propval *val)
@@ -1726,6 +1813,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 				  const union power_supply_propval *val)
 {
 	static bool init;
+	unsigned long flags;
 	struct dwc3_msm *mdwc = container_of(psy, struct dwc3_msm,
 								usb_psy);
 
@@ -1743,6 +1831,11 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		if (mdwc->otg_xceiv && !mdwc->ext_inuse &&
 		    (mdwc->ext_xceiv.otg_capability || !init)) {
 			mdwc->ext_xceiv.bsv = val->intval;
+			/* Kick the phone out of host mode if vbus is on */
+			if (val->intval &&
+				(mdwc->ext_xceiv.id == DWC3_ID_GROUND))
+				mdwc->ext_xceiv.id = mdwc->id_state =
+								DWC3_ID_FLOAT;
 			/*
 			 * Set debouncing delay to 120ms. Otherwise battery
 			 * charging CDP complaince test fails if delay > 120ms.
@@ -1754,6 +1847,35 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 				init = true;
 		}
 		mdwc->vbus_active = val->intval;
+
+		if (!mdwc->pmic_id_irq)
+			break;
+
+		/* read id value at powerup */
+		if (mdwc->defer_read_id) {
+			mdwc->defer_read_id = false;
+			local_irq_save(flags);
+			/* Update initial ID state */
+			mdwc->id_state =
+				!!irq_read_line(mdwc->pmic_id_irq);
+			if (mdwc->id_state == DWC3_ID_GROUND &&
+						!mdwc->vbus_active)
+				queue_delayed_work(system_nrt_wq,
+						&mdwc->id_work,
+						msecs_to_jiffies(
+							DWC3_ID_STATUS_DELAY));
+			local_irq_restore(flags);
+		}
+
+		/* Disable ID interrupts when vbus is active */
+		if (mdwc->vbus_active && mdwc->id_irq_enabled) {
+			disable_irq(mdwc->pmic_id_irq);
+			mdwc->id_irq_enabled = false;
+		} else if (!mdwc->vbus_active && !mdwc->id_irq_enabled) {
+			enable_irq(mdwc->pmic_id_irq);
+			mdwc->id_irq_enabled = true;
+		}
+
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		mdwc->online = val->intval;
@@ -1782,6 +1904,8 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			break;
 		default:
 			mdwc->charger.chg_type = DWC3_INVALID_CHARGER;
+			/* Default power supply type to USB */
+			psy->type = POWER_SUPPLY_TYPE_USB;
 			break;
 		}
 
@@ -1896,13 +2020,20 @@ static void dwc3_ext_notify_online(void *ctx, int on)
 
 static void dwc3_id_work(struct work_struct *w)
 {
-	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, id_work);
+	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, id_work.work);
 	int ret;
+
+	if (mdwc->vbus_active) {
+		pr_err("Ignore spurious id interrupt, when vbus is active\n");
+		return;
+	}
 
 	/* Give external client a chance to handle */
 	if (!mdwc->ext_inuse && usb_ext) {
-		if (mdwc->pmic_id_irq)
+		if (mdwc->pmic_id_irq && mdwc->id_irq_enabled) {
 			disable_irq(mdwc->pmic_id_irq);
+			mdwc->id_irq_enabled = false;
+		}
 
 		ret = usb_ext->notify(usb_ext->ctxt, mdwc->id_state,
 				      dwc3_ext_notify_online, mdwc);
@@ -1915,10 +2046,21 @@ static void dwc3_id_work(struct work_struct *w)
 			/* ID may have changed while IRQ disabled; update it */
 			mdwc->id_state = !!irq_read_line(mdwc->pmic_id_irq);
 			local_irq_restore(flags);
-			enable_irq(mdwc->pmic_id_irq);
+			if (!mdwc->id_irq_enabled) {
+				enable_irq(mdwc->pmic_id_irq);
+				mdwc->id_irq_enabled = true;
+			}
 		}
 
 		mdwc->ext_inuse = (ret == 0);
+	}
+
+	if (mdwc->pmic_id_irq &&
+		(mdwc->id_state == DWC3_ID_GROUND) &&
+		(get_prop_usbid_voltage_now(mdwc) > DWC3_ID_GND_THRESH)) {
+		mdwc->id_state = DWC3_ID_FLOAT;
+		pr_err("Spurious ID GND, Ignore\n");
+		return;
 	}
 
 	if (!mdwc->ext_inuse) { /* notify OTG */
@@ -1936,7 +2078,12 @@ static irqreturn_t dwc3_pmic_id_irq(int irq, void *data)
 	id = !!irq_read_line(irq);
 	if (mdwc->id_state != id) {
 		mdwc->id_state = id;
-		queue_work(system_nrt_wq, &mdwc->id_work);
+		if (mdwc->vbus_active)
+			return IRQ_HANDLED;
+
+		queue_delayed_work(system_nrt_wq, &mdwc->id_work,
+				 msecs_to_jiffies(
+					DWC3_ID_STATUS_DELAY));
 	}
 
 	return IRQ_HANDLED;
@@ -1979,7 +2126,7 @@ static void dwc3_adc_notification(enum qpnp_tm_state state, void *ctx)
 		mdwc->adc_param.state_request = ADC_TM_HIGH_THR_ENABLE;
 	}
 
-	dwc3_id_work(&mdwc->id_work);
+	dwc3_id_work(&mdwc->id_work.work);
 
 	/* re-arm ADC interrupt */
 	qpnp_adc_tm_usbid_configure(mdwc->adc_tm_dev, &mdwc->adc_param);
@@ -2227,6 +2374,23 @@ unreg_chrdev:
 	return ret;
 }
 
+static int msm_dwc3_hsphy_autosuspend(struct usb_phy *x, struct device *dev,
+				int enable_autosuspend)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev->parent->parent);
+	u32 reg;
+
+	reg = dwc3_msm_read_reg(mdwc->base, DWC3_GUSB2PHYCFG(0));
+	if (enable_autosuspend)
+		reg |= DWC3_GUSB2PHYCFG_SUSPHY;
+	else
+		reg &= ~(DWC3_GUSB2PHYCFG_SUSPHY);
+
+	dwc3_msm_write_reg(mdwc->base, DWC3_GUSB2PHYCFG(0), reg);
+
+	return 0;
+}
+
 static int dwc3_msm_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node, *dwc3_node;
@@ -2235,7 +2399,6 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	struct dwc3	*dwc;
 	struct resource *res;
 	void __iomem *tcsr;
-	unsigned long flags;
 	bool host_mode;
 	int ret = 0;
 
@@ -2258,7 +2421,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&mdwc->resume_work, dwc3_resume_work);
 	INIT_WORK(&mdwc->restart_usb_work, dwc3_restart_usb_work);
 	INIT_WORK(&mdwc->usb_block_reset_work, dwc3_block_reset_usb_work);
-	INIT_WORK(&mdwc->id_work, dwc3_id_work);
+	INIT_DELAYED_WORK(&mdwc->id_work, dwc3_id_work);
 	INIT_DELAYED_WORK(&mdwc->init_adc_work, dwc3_init_adc_work);
 	init_completion(&mdwc->ext_chg_wait);
 
@@ -2380,6 +2543,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 			goto disable_ref_clk;
 		}
 		enable_irq_wake(mdwc->hs_phy_irq);
+		atomic_set(&mdwc->hs_phy_irq_wake, 1);
 	}
 
 	if (mdwc->ext_xceiv.otg_capability) {
@@ -2554,6 +2718,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		ret = PTR_ERR(mdwc->hs_phy);
 		goto put_dwc3;
 	}
+	mdwc->hs_phy->set_phy_autosuspend = msm_dwc3_hsphy_autosuspend;
 
 	mdwc->ss_phy = devm_usb_get_phy_by_phandle(&mdwc->dwc3->dev,
 							"usb-phy", 1);
@@ -2582,6 +2747,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc->enable_suspend_event = mdwc->enable_suspend_event;
 	/* Register with OTG if present */
 	if (mdwc->otg_xceiv) {
+		mdwc->charger.get_linestate = dwc3_msm_get_linestate;
 		/* Skip charger detection for simulator targets */
 		if (!mdwc->charger.skip_chg_detect) {
 			mdwc->charger.start_detection = dwc3_start_chg_det;
@@ -2635,12 +2801,26 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	/* Update initial ID state */
 	if (mdwc->pmic_id_irq) {
-		local_irq_save(flags);
-		mdwc->id_state = !!irq_read_line(mdwc->pmic_id_irq);
-		if (mdwc->id_state == DWC3_ID_GROUND)
-			queue_work(system_nrt_wq, &mdwc->id_work);
-		local_irq_restore(flags);
+		mdwc->pmic_id_gpio = of_get_named_gpio(node,
+					"pmic-id-gpio", 0);
+		if (of_property_read_u32(node,
+				"pmic-id-amux-chan",
+				&mdwc->pmic_id_amux_chan))
+			dev_dbg(&pdev->dev,
+				"unable to read ID amux\n");
+		if (of_property_read_u32(node,
+				"pmic-id-vin",
+				&mdwc->pmic_id_vin))
+			dev_dbg(&pdev->dev,
+				"unable to read ID vin\n");
+		if (of_property_read_u32(node,
+				"pmic-id-pull",
+				&mdwc->pmic_id_pull))
+			dev_dbg(&pdev->dev,
+				"unable to read ID pull\n");
+		mdwc->defer_read_id = true;
 		enable_irq_wake(mdwc->pmic_id_irq);
+		mdwc->id_irq_enabled = true;
 	}
 
 	if (of_property_read_bool(node, "qcom,reset_hsphy_sleep_clk_on_init")) {
@@ -2704,13 +2884,27 @@ static int dwc3_msm_remove_children(struct device *dev, void *data)
 static int dwc3_msm_remove(struct platform_device *pdev)
 {
 	struct dwc3_msm	*mdwc = platform_get_drvdata(pdev);
+	int ret_pm;
 
 	if (cpu_to_affin)
 		unregister_cpu_notifier(&mdwc->dwc3_cpu_notifier);
 
-	pm_runtime_disable(mdwc->dev);
-	pm_runtime_set_suspended(mdwc->dev);
-	device_wakeup_disable(mdwc->dev);
+	/*
+	 * In case of system suspend, pm_runtime_get_sync fails.
+	 * Hence turn ON the clocks manually.
+	 */
+	ret_pm = pm_runtime_get_sync(mdwc->dev);
+	if (ret_pm < 0) {
+		dev_err(mdwc->dev,
+			"pm_runtime_get_sync failed with %d\n", ret_pm);
+		clk_prepare_enable(mdwc->utmi_clk);
+		clk_prepare_enable(mdwc->core_clk);
+		clk_prepare_enable(mdwc->iface_clk);
+		clk_prepare_enable(mdwc->sleep_clk);
+		clk_prepare_enable(mdwc->hsphy_sleep_clk);
+		clk_prepare_enable(mdwc->ref_clk);
+		clk_prepare_enable(mdwc->xo_clk);
+	}
 
 	if (mdwc->ext_chg_device) {
 		device_destroy(mdwc->ext_chg_class, mdwc->ext_chg_dev);
@@ -2733,10 +2927,19 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	platform_device_put(mdwc->dwc3);
 	device_for_each_child(&pdev->dev, NULL, dwc3_msm_remove_children);
 
+	pm_runtime_disable(mdwc->dev);
+	pm_runtime_barrier(mdwc->dev);
+	pm_runtime_put_sync(mdwc->dev);
+	pm_runtime_set_suspended(mdwc->dev);
+	device_wakeup_disable(mdwc->dev);
+
 	if (!IS_ERR_OR_NULL(mdwc->vbus_otg))
 		regulator_disable(mdwc->vbus_otg);
 
-	disable_irq_wake(mdwc->hs_phy_irq);
+	if (atomic_read(&mdwc->hs_phy_irq_wake)) {
+		atomic_set(&mdwc->hs_phy_irq_wake, 0);
+		disable_irq_wake(mdwc->hs_phy_irq);
+	}
 
 	clk_disable_unprepare(mdwc->utmi_clk);
 	clk_disable_unprepare(mdwc->core_clk);
@@ -2776,6 +2979,7 @@ static int dwc3_msm_pm_resume(struct device *dev)
 {
 	int ret = 0;
 	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
 	dev_dbg(dev, "dwc3-msm PM resume\n");
 
@@ -2797,6 +3001,9 @@ static int dwc3_msm_pm_resume(struct device *dev)
 				mdwc->ext_xceiv.notify_ext_events(
 							mdwc->otg_xceiv->otg,
 							DWC3_EVENT_XCEIV_STATE);
+
+		} else if (mdwc->scope == POWER_SUPPLY_SCOPE_SYSTEM) {
+			pm_runtime_resume(&dwc->xhci->dev);
 		}
 	}
 

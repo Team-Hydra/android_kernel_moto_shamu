@@ -305,11 +305,9 @@ struct hfi_buffer_info {
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x018)
 #define HFI_PROPERTY_PARAM_VENC_MULTIREF_P				\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x019)
-#define HFI_PROPERTY_PARAM_VENC_HIER_P_NUM_ENH_LAYER	\
-	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x01A)
 #define HFI_PROPERTY_PARAM_VENC_H264_NAL_SVC_EXT		\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x01B)
-#define HFI_PROPERTY_PARAM_VENC_H264_LTRMODE		\
+#define HFI_PROPERTY_PARAM_VENC_LTRMODE		\
 	 (HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x01C)
 #define HFI_PROPERTY_PARAM_VENC_VIDEO_FULL_RANGE	\
 	(HFI_PROPERTY_PARAM_VENC_COMMON_START + 0x01D)
@@ -347,11 +345,13 @@ struct hfi_buffer_info {
 	(HFI_DOMAIN_BASE_VPE + HFI_ARCH_COMMON_OFFSET + 0x7000)
 #define  HFI_PROPERTY_CONFIG_VENC_SYNC_FRAME_SEQUENCE_HEADER	\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x008)
-#define  HFI_PROPERTY_CONFIG_VENC_H264_MARKLTRFRAME			\
+#define  HFI_PROPERTY_CONFIG_VENC_MARKLTRFRAME			\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x009)
-#define  HFI_PROPERTY_CONFIG_VENC_H264_USELTRFRAME			\
+#define  HFI_PROPERTY_CONFIG_VENC_USELTRFRAME			\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00A)
-#define  HFI_PROPERTY_CONFIG_VENC_H264_LTRPERIOD			\
+#define  HFI_PROPERTY_CONFIG_VENC_HIER_P_ENH_LAYER			\
+	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00B)
+#define  HFI_PROPERTY_CONFIG_VENC_LTRPERIOD			\
 	(HFI_PROPERTY_CONFIG_VENC_COMMON_START + 0x00C)
 #define HFI_PROPERTY_CONFIG_VPE_COMMON_START				\
 	(HFI_DOMAIN_BASE_VPE + HFI_ARCH_COMMON_OFFSET + 0x8000)
@@ -375,7 +375,7 @@ struct hfi_bitrate {
 #define HFI_CAPABILITY_BITRATE				(HFI_COMMON_BASE + 0x8)
 #define  HFI_CAPABILITY_BFRAME				(HFI_COMMON_BASE + 0x9)
 #define  HFI_CAPABILITY_HIER_P_NUM_ENH_LAYERS   (HFI_COMMON_BASE + 0x10)
-#define  HFI_CAPABILITY_ENC_H264_LTR_COUNT      (HFI_COMMON_BASE + 0x11)
+#define  HFI_CAPABILITY_ENC_LTR_COUNT      (HFI_COMMON_BASE + 0x11)
 
 struct hfi_capability_supported {
 	u32 capability_type;
@@ -460,6 +460,11 @@ struct hfi_operations_type {
 
 struct hfi_max_num_b_frames {
 	u32 max_num_b_frames;
+};
+
+struct hfi_vc1e_perf_cfg_type {
+	u32 search_range_x_subsampled[3];
+	u32 search_range_y_subsampled[3];
 };
 
 struct hfi_conceal_color {
@@ -599,6 +604,10 @@ struct hfi_h264_vui_timing_info {
 #define HFI_COLOR_FORMAT_RGB888				(HFI_COMMON_BASE + 0xC)
 #define HFI_COLOR_FORMAT_BGR888				(HFI_COMMON_BASE + 0xD)
 
+#define HFI_MAX_MATRIX_COEFFS 9
+#define HFI_MAX_BIAS_COEFFS 3
+#define HFI_MAX_LIMIT_COEFFS 6
+
 struct hfi_uncompressed_format_select {
 	u32 buffer_type;
 	u32 format;
@@ -642,6 +651,12 @@ struct hfi_codec_supported {
 struct hfi_properties_supported {
 	u32 num_properties;
 	u32 rg_properties[1];
+};
+
+struct hfi_vpe_color_space_conversion {
+	u32 csc_matrix[HFI_MAX_MATRIX_COEFFS];
+	u32 csc_bias[HFI_MAX_BIAS_COEFFS];
+	u32 csc_limit[HFI_MAX_LIMIT_COEFFS];
 };
 
 #define HFI_ROTATE_NONE					(HFI_COMMON_BASE + 0x1)
