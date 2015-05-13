@@ -58,6 +58,7 @@ extern int msm_vidc_hw_rsp_timeout;
 extern int msm_vidc_vpe_csc_601_to_709;
 >>>>>>> google/android-msm-shamu-3.10-lollipop-mr1
 extern int msm_vidc_dcvs_mode;
+extern int msm_vidc_sys_idle_indicator;
 
 #define VIDC_MSG_PRIO2STRING(__level) ({ \
 	char *__str; \
