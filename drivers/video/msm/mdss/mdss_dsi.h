@@ -245,12 +245,6 @@ struct dsi_pinctrl_res {
 	struct pinctrl_state *gpio_state_suspend;
 };
 
-struct panel_horizontal_idle {
-	int min;
-	int max;
-	int idle;
-};
-
 enum {
 	DSI_CTRL_0,
 	DSI_CTRL_1,

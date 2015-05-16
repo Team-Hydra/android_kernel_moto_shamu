@@ -577,23 +577,6 @@ int32_t msm_pcie_wake_irq_init(struct msm_pcie_dev_t *dev)
 			dev->rc_idx);
 		return rc;
 	}
-
-	/* Create a virtual domain of interrupts */
-	if (!dev->msi_gicm_addr) {
-		dev->irq_domain = irq_domain_add_linear(dev->pdev->dev.of_node,
-			PCIE_MSI_NR_IRQS, &msm_pcie_msi_ops, dev);
-
-		if (!dev->irq_domain) {
-			PCIE_ERR(dev,
-				"PCIe: RC%d: Unable to initialize irq domain\n",
-				dev->rc_idx);
-			disable_irq(dev->wake_n);
-			return PTR_ERR(dev->irq_domain);
-		}
-
-		msi_start = irq_create_mapping(dev->irq_domain, 0);
-	}
-
 #ifdef CONFIG_BCM4356
 	if (np) {
 		gpio_wlan_host_wake = of_get_named_gpio(np, "wl_host_wake", 0);

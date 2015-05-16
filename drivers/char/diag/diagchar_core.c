@@ -283,7 +283,6 @@ static int diagchar_close(struct inode *inode, struct file *file)
 	int i = -1;
 	struct diagchar_priv *diagpriv_data = file->private_data;
 	struct diag_dci_client_tbl *dci_entry = NULL;
-	unsigned long flags;
 
 	pr_debug("diag: process exit %s\n", current->comm);
 	if (!(file->private_data)) {

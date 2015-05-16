@@ -1058,29 +1058,6 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 	mutex_unlock(&mfd->bl_lock);
 }
 
-static int mdss_fb_start_disp_thread(struct msm_fb_data_type *mfd)
-{
-	int ret = 0;
-
-	pr_debug("%pS: start display thread fb%d\n",
-		__builtin_return_address(0), mfd->index);
-
-	mdss_fb_get_split(mfd);
-
-	atomic_set(&mfd->commits_pending, 0);
-	mfd->disp_thread = kthread_run(__mdss_fb_display_thread,
-				mfd, "mdss_fb%d", mfd->index);
-
-	if (IS_ERR(mfd->disp_thread)) {
-		pr_err("ERROR: unable to start display thread %d\n",
-				mfd->index);
-		ret = PTR_ERR(mfd->disp_thread);
-		mfd->disp_thread = NULL;
-	}
-
-	return ret;
-}
-
 static void mdss_fb_stop_disp_thread(struct msm_fb_data_type *mfd)
 {
 	pr_debug("%pS: stop display thread fb%d\n",
@@ -1820,6 +1797,17 @@ static int mdss_fb_open(struct fb_info *info, int user)
 	}
 
 	if (!mfd->ref_cnt) {
+		mdss_fb_get_split(mfd);
+		mfd->disp_thread = kthread_run(__mdss_fb_display_thread, mfd,
+				"mdss_fb%d", mfd->index);
+		if (IS_ERR(mfd->disp_thread)) {
+			pr_err("unable to start display thread %d\n",
+				mfd->index);
+			result = PTR_ERR(mfd->disp_thread);
+			mfd->disp_thread = NULL;
+			goto thread_error;
+		}
+
 		result = mdss_fb_blank_sub(FB_BLANK_UNBLANK, info,
 					   mfd->op_enable);
 		if (result) {

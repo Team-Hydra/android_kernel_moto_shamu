@@ -760,40 +760,6 @@ end:
 }
 
 /**
- * mdss_mdp_idle_pc_restore() - Restore MDSS settings when exiting idle pc
- *
- * MDSS GDSC can be voted off during idle-screen usecase for MIPI DSI command
- * mode displays, referred to as MDSS idle power collapse. Upon subsequent
- * frame update, MDSS GDSC needs to turned back on and hw state needs to be
- * restored.
- */
-static int mdss_mdp_idle_pc_restore(void)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	int rc = 0;
-
-	mutex_lock(&mdp_fs_idle_pc_lock);
-	if (!mdata->idle_pc) {
-		pr_debug("no idle pc, no need to restore\n");
-		goto end;
-	}
-
-	pr_debug("called from %pS\n", __builtin_return_address(0));
-	rc = mdss_iommu_attach(mdata);
-	if (IS_ERR_VALUE(rc)) {
-		pr_err("mdss iommu attach failed rc=%d\n", rc);
-		goto end;
-	}
-	mdss_hw_init(mdata);
-	mdss_mdp_ctl_restore();
-	mdata->idle_pc = false;
-
-end:
-	mutex_unlock(&mdp_fs_idle_pc_lock);
-	return rc;
-}
-
-/**
  * mdss_bus_bandwidth_ctrl() -- place bus bandwidth request
  * @enable:	value of enable or disable
  *

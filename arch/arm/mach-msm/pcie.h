@@ -40,7 +40,6 @@
 #define PCIE_LOG_PAGES (50)
 
 #define PCIE_DBG(dev, fmt, arg...) do {			 \
-<<<<<<< HEAD
 	if ((dev) && (dev)->ipc_log_long)   \
 		ipc_log_string((dev)->ipc_log_long, \
 			"DBG1:%s: " fmt, __func__, arg); \

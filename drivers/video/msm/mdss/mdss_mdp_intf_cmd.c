@@ -30,6 +30,7 @@ struct mdss_mdp_cmd_ctx {
 	struct mdss_mdp_ctl *ctl;
 	u32 pp_num;
 	u8 ref_cnt;
+	struct completion pp_comp;
 	struct completion stop_comp;
 	wait_queue_head_t pp_waitq;
 	struct list_head vsync_handlers;
@@ -504,6 +505,7 @@ static int mdss_mdp_cmd_wait4pingpong(struct mdss_mdp_ctl *ctl, void *arg)
 	struct mdss_mdp_cmd_ctx *ctx;
 	struct mdss_panel_data *pdata;
 	unsigned long flags;
+	int need_wait = 0;
 	int rc = 0;
 
 	ctx = (struct mdss_mdp_cmd_ctx *) ctl->priv_data;
@@ -810,7 +812,7 @@ int mdss_mdp_cmd_stop(struct mdss_mdp_ctl *ctl, int panel_power_state)
 	ctx = (struct mdss_mdp_cmd_ctx *) ctl->priv_data;
 	if (!ctx) {
 		pr_err("invalid ctx\n");
-		return;
+		return -ENODEV;
 	}
 
 	turn_off_panel = ctx->panel_power_state;

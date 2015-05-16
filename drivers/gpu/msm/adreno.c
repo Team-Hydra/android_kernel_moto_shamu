@@ -1863,7 +1863,6 @@ static int _adreno_start(struct adreno_device *adreno_dev)
 	unsigned int state = device->state;
 	unsigned int regulator_left_on = 0;
 	unsigned int pmqos_wakeup_vote = device->pwrctrl.pm_qos_wakeup_latency;
-	unsigned int pmqos_active_vote = device->pwrctrl.pm_qos_active_latency;
 
 	pm_qos_update_request(&device->pwrctrl.pm_qos_req_dma,
 			pmqos_wakeup_vote);

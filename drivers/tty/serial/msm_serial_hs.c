@@ -2282,7 +2282,7 @@ void msm_hs_request_clock_on(struct uart_port *uport)
 	switch (cur_clk_state) {
 	case MSM_HS_CLK_OFF:
 		wake_lock(&msm_uport->dma_wake_lock);
-		if (use_low_power_wakeup(msm_uport))
+		if (use_low_power_wakeup(msm_uport)) {
 			disable_irq_nosync(msm_uport->wakeup.irq);
 			/* uport-irq was disabled when clocked off */
 			enable_irq(uport->irq);
