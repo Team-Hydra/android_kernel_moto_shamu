@@ -1823,6 +1823,10 @@ static int mdss_fb_open(struct fb_info *info, int user)
 	return 0;
 
 blank_error:
+	kthread_stop(mfd->disp_thread);
+	mfd->disp_thread = NULL;
+
+thread_error:
 	pm_runtime_put(info->dev);
 
 pm_error:
